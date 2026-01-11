@@ -13,7 +13,7 @@ class PatchEmbedding(nn.Module):
         in_channels: Number of input channels
         embed_dim: Embedding dimension
     """
-    def __init__(self, img_size=(128, 128), context_size=16, patch_size=8, in_channels=3, embed_dim=128):
+    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, embed_dim=128):
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
