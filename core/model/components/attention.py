@@ -24,6 +24,7 @@ class SpatialAttentionBlock(nn.Module):
         self.q_proj = nn.Linear(embed_dim, kq_dim)
         self.k_proj = nn.Linear(embed_dim, kq_dim)
         self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
 
     def forward(self, x):
         """
@@ -73,6 +74,9 @@ class SpatialAttentionBlock(nn.Module):
         attn_output = attn_output.permute(0, 2, 3, 1, 4)  # (B, T, N, num_heads, head_dim)
         attn_output = attn_output.reshape(B, T, N, self.embed_dim) # Merge heads
 
+        # Apply output projection
+        attn_output = self.out_proj(attn_output)
+
         return attn_output
 
 class TemporalAttentionBlock(nn.Module):
@@ -97,6 +101,7 @@ class TemporalAttentionBlock(nn.Module):
         self.q_proj = nn.Linear(embed_dim, kq_dim)
         self.k_proj = nn.Linear(embed_dim, kq_dim)
         self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
 
     def forward(self, x):
         """
@@ -156,5 +161,8 @@ class TemporalAttentionBlock(nn.Module):
         # Reshape back: (B, num_heads, N, T, head_dim) -> (B, T, N, embed_dim)
         attn_output = attn_output.permute(0, 3, 2, 1, 4)  # (B, T, N, num_heads, head_dim)
         attn_output = attn_output.reshape(B, T, N, self.embed_dim)  # Merge heads
+
+        # Apply output projection
+        attn_output = self.out_proj(attn_output)
 
         return attn_output
