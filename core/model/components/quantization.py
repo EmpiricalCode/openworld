@@ -36,10 +36,15 @@ class FSQ(nn.Module):
 
         # Snap to hypercube
         # Scale to [0, num_bins - 1]
-        x = (x + 1) / 2 * (self.num_bins - 1)
+        x_scaled = (x + 1) / 2 * (self.num_bins - 1)
+
         # Round to nearest integer
-        x = torch.round(x)
+        x_quantized = torch.round(x_scaled)
+
+        # Straight-through estimator: forward uses quantized, backward uses continuous
+        x_quantized = x_scaled + (x_quantized - x_scaled).detach()
+
         # Scale back to [-1, 1]
-        x = x / (self.num_bins - 1) * 2 - 1
+        x = x_quantized / (self.num_bins - 1) * 2 - 1
 
         return x
