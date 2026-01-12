@@ -74,7 +74,7 @@ def train():
 
     # Create dataset and dataloader
     dataset = LunarLanderDataset(
-        h5_path='data/lunar_lander/lunar_lander_10k_steps.h5',
+        h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_10k_steps.h5',
         sequence_length=sequence_length
     )
 
@@ -133,15 +133,14 @@ def train():
         print()
 
         # Save checkpoint
-        if (epoch + 1) % 10 == 0:
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': avg_loss,
-            }, f'checkpoints/video_tokenizer_epoch_{epoch+1}.pt')
-            print(f"Checkpoint saved: checkpoints/video_tokenizer_epoch_{epoch+1}.pt")
-            print()
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': avg_loss,
+        }, f'checkpoints/video_tokenizer_epoch_{epoch+1}.pt')
+        print(f"Checkpoint saved: checkpoints/video_tokenizer_epoch_{epoch+1}.pt")
+        print()
 
 if __name__ == '__main__':
     train()
