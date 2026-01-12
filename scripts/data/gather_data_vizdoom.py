@@ -1,4 +1,5 @@
 import gymnasium as gym
+import vizdoom.gymnasium_wrapper  # Register ViZDoom environments
 import pygame
 import cv2
 import numpy as np
@@ -6,16 +7,16 @@ import h5py
 from pathlib import Path
 
 # Create data directory
-data_dir = Path("data/lunar_lander")
+data_dir = Path("data/vizdoom_healthgathering")
 data_dir.mkdir(parents=True, exist_ok=True)
 
-env = gym.make("LunarLander-v3", render_mode="rgb_array")
+env = gym.make("VizdoomHealthGathering-v1", render_mode="rgb_array")
 observation, info = env.reset()
 
 # Initialize pygame for display
 pygame.init()
 screen = pygame.display.set_mode((128, 128))
-pygame.display.set_caption("Lunar Lander 128x128")
+pygame.display.set_caption("ViZDoom HealthGathering 128x128")
 
 # Storage for frames and actions
 frames = []
@@ -67,7 +68,7 @@ env.close()
 
 # Save data to HDF5 with LZF compression
 print("Saving data...")
-output_file = data_dir / "lunar_lander_10k_steps.h5"
+output_file = data_dir / "vizdoom_healthgathering_10k_steps.h5"
 
 with h5py.File(output_file, "w") as f:
     f.create_dataset("frames", data=np.array(frames), compression="lzf")
