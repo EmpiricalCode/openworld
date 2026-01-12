@@ -19,17 +19,21 @@ class LunarLanderDataset(Dataset):
             h5_path: Path to the h5 file
             sequence_length: Number of frames per sequence
         """
-        self.h5_path = h5_path
         self.sequence_length = sequence_length
 
-        # Open file to get total number of frames
+        # Load entire dataset into memory once
+        print(f"Loading dataset from {h5_path}...")
         with h5py.File(h5_path, 'r') as f:
-            self.total_frames = f['frames'].shape[0]
-            print(f"Dataset loaded: {self.total_frames} total frames")
-            print(f"Frame shape: {f['frames'].shape[1:]}")  # (128, 128, 3)
-            print(f"Creating sequences of length {sequence_length}")
-            print(f"Total sequences: {self.__len__()}")
-            print()
+            # Load all frames into RAM
+            self.frames = f['frames'][:]  # Load entire array
+
+        self.total_frames = self.frames.shape[0]
+        print(f"Dataset loaded: {self.total_frames} total frames")
+        print(f"Frame shape: {self.frames.shape[1:]}")  # (128, 128, 3)
+        print(f"Creating sequences of length {sequence_length}")
+        print(f"Total sequences: {self.__len__()}")
+        print(f"Memory usage: {self.frames.nbytes / (1024**2):.2f} MB")
+        print()
 
     def __len__(self):
         # Number of sequences we can create
@@ -47,21 +51,20 @@ class LunarLanderDataset(Dataset):
                          H = 128
                          W = 128
         """
-        with h5py.File(self.h5_path, 'r') as f:
-            # Get sequence of frames starting at idx
-            frames = f['frames'][idx:idx + self.sequence_length]  # (T, H, W, C)
+        # Get sequence of frames from in-memory array
+        frames = self.frames[idx:idx + self.sequence_length]  # (T, H, W, C)
 
-            # Convert to float and normalize to [0, 1]
-            frames = frames.astype(np.float32) / 255.0
+        # Convert to float and normalize to [0, 1]
+        frames = frames.astype(np.float32) / 255.0
 
-            # Convert to tensor and permute to (T, C, H, W)
-            frames = torch.from_numpy(frames).permute(0, 3, 1, 2)
+        # Convert to tensor and permute to (T, C, H, W)
+        frames = torch.from_numpy(frames).permute(0, 3, 1, 2)
 
-            return frames
+        return frames
 
 def train():
     # Hyperparameters
-    batch_size = 4
+    batch_size = 16  # Increased from 4 for better GPU utilization
     num_epochs = 10
     learning_rate = 1e-4
     sequence_length = 8
