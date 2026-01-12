@@ -92,7 +92,7 @@ def train():
         in_channels=3,
         num_frames=sequence_length,
         embed_dim=128,
-        latent_dim=5
+        latent_dim=8
     ).to(device)
 
     # Loss and optimizer
