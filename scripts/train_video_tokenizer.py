@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import sys
 import os
+import time
 from torch.utils.data import Dataset, DataLoader
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -112,6 +113,8 @@ def train():
         total_loss = 0
 
         for batch_idx, videos in enumerate(dataloader):
+            batch_start_time = time.time()
+
             videos = videos.to(device)
 
             # Forward pass
@@ -123,10 +126,10 @@ def train():
             loss.backward()
             optimizer.step()
 
+            batch_time = time.time() - batch_start_time
             total_loss += loss.item()
 
-            if batch_idx % 10 == 0:
-                print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx}/{len(dataloader)}], Loss: {loss.item():.6f}")
+            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx}/{len(dataloader)}], Loss: {loss.item():.6f}, Time: {batch_time:.3f}s")
 
         avg_loss = total_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{num_epochs}] Average Loss: {avg_loss:.6f}")
