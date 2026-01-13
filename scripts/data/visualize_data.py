@@ -81,7 +81,7 @@ def visualize_data(data_file, fps=30, start_step=0):
 
 if __name__ == "__main__":
     # Default data file
-    default_file = Path("data/lunar_lander/lunar_lander_10k_steps.h5")
+    default_file = Path("data/vizdoom_healthgathering/vizdoom_healthgathering_10k_steps.h5")
 
     if len(sys.argv) > 1:
         data_file = Path(sys.argv[1])
