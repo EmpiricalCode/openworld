@@ -144,6 +144,11 @@ def train_dqn(max_steps=250000, device='cuda' if torch.cuda.is_available() else 
         episode_steps = 0
         done = False
 
+        # Track alternating turn actions (to penalize 2-3-2-3 oscillation)
+        prev_action = None
+        prev_prev_action = None
+        alternation_count = 0
+
         while not done:
             # Epsilon-greedy
             epsilon = epsilon_end + (epsilon_start - epsilon_end) * np.exp(-total_steps / epsilon_decay)
@@ -174,6 +179,30 @@ def train_dqn(max_steps=250000, device='cuda' if torch.cuda.is_available() else 
             # Bonus for moving forward (action 1 is typically forward)
             if action == 1:
                 reward += 0.25
+
+            # Penalty for alternating between left (2) and right (3) repeatedly
+            # Detect pattern: 2-3-2 or 3-2-3 and onwards
+            if action in [2, 3]:  # Current action is a turn
+                # Check if we're alternating between 2 and 3
+                if prev_action is not None and prev_prev_action is not None:
+                    # Detect alternation: current matches prev_prev, and prev is opposite
+                    opposite_turn = 3 if action == 2 else 2
+                    if prev_action == opposite_turn and prev_prev_action == action:
+                        # We're in an alternation pattern!
+                        reward -= 5.0
+                        alternation_count += 1
+                    else:
+                        # Pattern broken, reset counter
+                        alternation_count = 0
+
+                # Update action history
+                prev_prev_action = prev_action
+                prev_action = action
+            else:
+                # Non-turn action breaks the pattern
+                prev_prev_action = None
+                prev_action = None
+                alternation_count = 0
 
             frame_stack.append(next_frame)
             next_state = np.array(frame_stack)
