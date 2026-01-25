@@ -420,11 +420,11 @@ if __name__ == "__main__":
         agent.load_state_dict(torch.load(args.load_agent, map_location=device))
         agent.eval()
         env.close()
-        collect_data_with_agent(agent, num_steps=10000, visualize=True)
+        collect_data_with_agent(agent, num_steps=100000, visualize=True)
     elif args.train:
         # Train and use trained agent (250k steps as per Aitchison 2019)
         agent = train_dqn(max_steps=250000, device=device)
-        collect_data_with_agent(agent, num_steps=10000, visualize=True)
+        collect_data_with_agent(agent, num_steps=100000, visualize=True)
     else:
         # Use random agent
-        collect_data_with_agent(None, num_steps=10000, visualize=True)
+        collect_data_with_agent(None, num_steps=100000, visualize=True)
