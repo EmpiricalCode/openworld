@@ -7,7 +7,7 @@ from matplotlib.animation import FuncAnimation
 
 def visualize_data(data_file, fps=30, start_step=0):
     """
-    Visualize collected Lunar Lander data using matplotlib.
+    Visualize collected ViZDoom HealthGathering data using matplotlib.
 
     Args:
         data_file: Path to HDF5 file
@@ -25,8 +25,8 @@ def visualize_data(data_file, fps=30, start_step=0):
     print(f"Loaded {len(frames)} frames")
     print(f"Frame shape: {frames[0].shape}")
 
-    # Action names
-    action_names = {0: "NOOP", 1: "LEFT", 2: "MAIN", 3: "RIGHT"}
+    # Action names for ViZDoom HealthGathering
+    action_names = {0: "NOOP", 1: "FORWARD", 2: "TURN_LEFT", 3: "TURN_RIGHT"}
 
     # Create figure
     fig, ax = plt.subplots(figsize=(6, 6))
@@ -80,16 +80,31 @@ def visualize_data(data_file, fps=30, start_step=0):
 
 
 if __name__ == "__main__":
-    # Default data file
-    default_file = Path("data/vizdoom_healthgathering/vizdoom_healthgathering_10k_steps.h5")
+    # Default to ViZDoom data files
+    default_files = [
+        Path("data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5"),
+        Path("data/vizdoom_healthgathering/vizdoom_healthgathering_random.h5"),
+    ]
 
     if len(sys.argv) > 1:
         data_file = Path(sys.argv[1])
     else:
-        data_file = default_file
+        # Try to find an existing file
+        data_file = None
+        for f in default_files:
+            if f.exists():
+                data_file = f
+                break
+
+        if data_file is None:
+            print(f"Error: No data files found. Checked:")
+            for f in default_files:
+                print(f"  - {f}")
+            sys.exit(1)
 
     if not data_file.exists():
         print(f"Error: Data file not found: {data_file}")
         sys.exit(1)
 
+    print(f"Using data file: {data_file}\n")
     visualize_data(data_file)
