@@ -4,6 +4,116 @@ from core.model.components.positional_encoding import SpatioTemporalEncoding
 from core.model.components.quantization import FSQ
 from core.model.spatial_temporal_transformer import STTransformer
 
+
+class VideoEncoder(nn.Module):
+    """Encoder that converts video to quantized latent representation."""
+
+    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5):
+        super().__init__()
+
+        self.patch_embedding = PatchEmbedding(img_size, patch_size, in_channels, embed_dim)
+        self.positional_encoding = SpatioTemporalEncoding(
+            num_patches_x=img_size[1] // patch_size,
+            num_patches_y=img_size[0] // patch_size,
+            num_frames=num_frames,
+            embed_dim=embed_dim
+        )
+        self.st_transformer = STTransformer(
+            embed_dim=embed_dim,
+            num_heads=4,
+            num_blocks=4,
+            num_patches_x=img_size[1] // patch_size,
+            num_patches_y=img_size[0] // patch_size,
+            num_frames=num_frames
+        )
+        self.latent_head = nn.Linear(embed_dim, latent_dim)
+        self.FSQ = FSQ(latent_dim=latent_dim, num_bins=4)
+
+    def forward(self, x):
+        """
+        Encode video to quantized latent.
+
+        Args:
+            x: (B, T, C, H, W)
+
+        Returns:
+            Quantized latent: (B, T, N, latent_dim)
+        """
+        # Patch Embedding
+        x = self.patch_embedding(x)  # Shape: (B, T, N, P)
+
+        # Add Positional Encoding
+        x = self.positional_encoding(x)  # Shape: (B, T, N, P)
+
+        # Spatial-Temporal Transformer
+        x = self.st_transformer(x)  # Shape: (B, T, N, P)
+
+        # Project to latent dimension
+        x = self.latent_head(x)  # Shape: (B, T, N, latent_dim)
+
+        # Quantization
+        x = self.FSQ(x)  # Shape: (B, T, N, latent_dim)
+
+        return x
+
+
+class VideoDecoder(nn.Module):
+    """Decoder that converts quantized latent back to video."""
+
+    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5):
+        super().__init__()
+
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.embed_dim = embed_dim
+        self.num_patches_x = img_size[1] // patch_size
+        self.num_patches_y = img_size[0] // patch_size
+
+        self.embedding_head = nn.Linear(latent_dim, embed_dim)
+        self.st_transformer = STTransformer(
+            embed_dim=embed_dim,
+            num_heads=4,
+            num_blocks=4,
+            num_patches_x=img_size[1] // patch_size,
+            num_patches_y=img_size[0] // patch_size,
+            num_frames=num_frames
+        )
+        self.un_proj = nn.Linear(embed_dim, patch_size * patch_size * in_channels)
+
+    def forward(self, x):
+        """
+        Decode quantized latent back to video.
+
+        Args:
+            x: Quantized latent (B, T, N, latent_dim)
+
+        Returns:
+            Reconstructed video: (B, T, C, H, W)
+        """
+        B, T, _, _ = x.shape
+        H, W = self.img_size
+
+        # Project back to embedding dimension
+        x = self.embedding_head(x)  # Shape: (B, T, N, P)
+
+        # Spatial-Temporal Transformer
+        x = self.st_transformer(x)  # Shape: (B, T, N, P)
+
+        # Reshape back to matrices of patch tokens
+        x = x.reshape(B, T, self.num_patches_y, self.num_patches_x, self.embed_dim)
+
+        # Un-project to patch pixels
+        x = self.un_proj(x)  # Shape: (B, T, num_patches_y, num_patches_x, patch_size * patch_size * in_channels)
+
+        # Re-shape to original video dimensions
+        x = x.reshape(B, T, self.num_patches_y, self.num_patches_x, self.in_channels, self.patch_size, self.patch_size)
+        x = x.permute(0, 1, 4, 2, 5, 3, 6)  # (B, T, C, num_patches_y, patch_size, num_patches_x, patch_size)
+        x = x.reshape(B, T, self.in_channels, H, W)  # (B, T, C, H, W)
+
+        return x
+
+
 class VideoTokenizer(nn.Module):
 
     def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5):
@@ -29,33 +139,8 @@ class VideoTokenizer(nn.Module):
         self.num_patches_y = img_size[0] // patch_size
         self.num_patches = self.num_patches_x * self.num_patches_y
 
-        self.patch_embedding = PatchEmbedding(img_size, patch_size, in_channels, embed_dim)
-        self.positional_encoding = SpatioTemporalEncoding(
-            num_patches_x=img_size[1] // patch_size,
-            num_patches_y=img_size[0] // patch_size,
-            num_frames=num_frames,
-            embed_dim=embed_dim
-        )
-        self.st_transformer_encoder = STTransformer(
-            embed_dim=embed_dim,
-            num_heads=4,
-            num_blocks=4,
-            num_patches_x=img_size[1] // patch_size,
-            num_patches_y=img_size[0] // patch_size,
-            num_frames=num_frames
-        )
-        self.st_transformer_decoder = STTransformer(
-            embed_dim=embed_dim,
-            num_heads=4,
-            num_blocks=4,
-            num_patches_x=img_size[1] // patch_size,
-            num_patches_y=img_size[0] // patch_size,
-            num_frames=num_frames
-        )
-        self.latent_head = nn.Linear(embed_dim, latent_dim)
-        self.embedding_head = nn.Linear(latent_dim, embed_dim)
-        self.FSQ = FSQ(latent_dim=latent_dim, num_bins=4)
-        self.un_proj = nn.Linear(embed_dim, patch_size * patch_size * in_channels)
+        self.encoder = VideoEncoder(img_size, patch_size, in_channels, num_frames, embed_dim, latent_dim)
+        self.decoder = VideoDecoder(img_size, patch_size, in_channels, num_frames, embed_dim, latent_dim)
 
     def forward(self, x):
         """
@@ -74,43 +159,10 @@ class VideoTokenizer(nn.Module):
                           N = number of patches (num_patches_x * num_patches_y)
                           P = embedding dimension
         """
+        # Encode to quantized latent
+        latent = self.encoder(x)  # Shape: (B, T, N, latent_dim)
 
-        # ENCODER
-
-        B, T, C, H, W = x.shape
-
-        # Patch Embedding
-        x = self.patch_embedding(x)  # Shape: (B, T, N, P)
-
-        # Add Positional Encoding
-        x = self.positional_encoding(x)  # Shape: (B, T, N, P)
-
-        # Spatial-Temporal Transformer
-        x = self.st_transformer_encoder(x)  # Shape: (B, T, N, P)
-
-        # Project to latent dimension
-        x = self.latent_head(x)  # Shape: (B, T, N, latent_dim)
-
-        # QUANTIZATION
-        x = self.FSQ(x)  # Shape: (B, T, N, latent_dim)
-
-        # DECODER
-
-        # Project back to embedding dimension
-        x = self.embedding_head(x)  # Shape: (B, T, N, P)
-
-        # Spatial-Temporal Transformer
-        x = self.st_transformer_decoder(x)  # Shape: (B, T, N, P)
-        
-        # Reshape back to matrices of patch tokens
-        x = x.reshape(B, T, self.num_patches_y, self.num_patches_x, self.embed_dim)
-
-        # Un-project to patch pixels
-        x = self.un_proj(x)  # Shape: (B, T, num_patches_y, num_patches_x, patch_size * patch_size * in_channels)
-
-        # Re-shape to original video dimensions
-        x = x.reshape(B, T, self.num_patches_y, self.num_patches_x, self.in_channels, self.patch_size, self.patch_size)
-        x = x.permute(0, 1, 4, 2, 5, 3, 6)  # (B, T, C, num_patches_y, patch_size, num_patches_x, patch_size)
-        x = x.reshape(B, T, C, H, W)  # (B, T, C, H, W)
+        # Decode back to video
+        x = self.decoder(latent)  # Shape: (B, T, C, H, W)
 
         return x
