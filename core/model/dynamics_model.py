@@ -60,7 +60,7 @@ class DynamicsModel(nn.Module):
         self.st_transformer = STTransformer(
             embed_dim=embed_dim,
             num_heads=4,
-            num_blocks=4,
+            num_blocks=6,
             num_patches_x=num_patches_x,
             num_patches_y=num_patches_y,
             num_frames=num_frames
