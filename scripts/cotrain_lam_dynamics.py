@@ -75,6 +75,7 @@ def train():
     in_channels = 3
     embed_dim = 96
     latent_dim = 5
+    latent_dim_actions = 2
     num_bins = 4
 
     tokenizer_checkpoint = 'checkpoints/video_tokenizer_epoch_6.pt'
@@ -116,7 +117,8 @@ def train():
         in_channels=in_channels,
         num_frames=sequence_length,
         embed_dim=embed_dim,
-        latent_dim=latent_dim
+        latent_dim=latent_dim,
+        latent_dim_actions=latent_dim_actions
     ).to(device)
 
     # Dynamics model
@@ -127,6 +129,7 @@ def train():
         num_frames=sequence_length,
         embed_dim=embed_dim,
         latent_dim=latent_dim,
+        latent_dim_actions=latent_dim_actions,
         num_bins=num_bins
     ).to(device)
 
@@ -166,7 +169,7 @@ def train():
             lam_loss = F.mse_loss(reconstructed, videos[:, 1:])
 
             # Step C: prepare dynamics inputs
-            null_action = torch.zeros(B, 1, latent_dim, device=device)
+            null_action = torch.zeros(B, 1, latent_dim_actions, device=device)
             a_shifted = torch.cat([null_action, actions], dim=1)  # (B, T, latent_dim)
             a_shifted = a_shifted.detach()  # stopgrad: don't let dynamics loss affect LAM
 

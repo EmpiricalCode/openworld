@@ -10,7 +10,7 @@ from core.model.spatial_temporal_transformer import STTransformer
 class LatentActionEncoder(nn.Module):
     """Encoder that infers latent actions from video frames."""
 
-    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5):
+    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim_actions=2):
         """
         Initialize the Latent Action Encoder.
 
@@ -20,7 +20,7 @@ class LatentActionEncoder(nn.Module):
             in_channels: Number of input channels. Default: 3
             num_frames: Number of frames in input video. Default: 8
             embed_dim: Embedding dimension. Default: 128
-            latent_dim: Latent action dimension. Default: 5
+            latent_dim_actions: Latent action dimension. Default: 2
         """
         super().__init__()
 
@@ -39,8 +39,8 @@ class LatentActionEncoder(nn.Module):
             num_frames=num_frames,
             embed_dim=embed_dim
         )
-        self.latent_head = Linear(embed_dim, latent_dim)
-        self.fsq = FSQ(latent_dim=latent_dim, num_bins=2)
+        self.latent_head = Linear(embed_dim, latent_dim_actions)
+        self.fsq = FSQ(latent_dim=latent_dim_actions, num_bins=2)
 
 
     def forward(self, x):
@@ -74,7 +74,7 @@ class LatentActionEncoder(nn.Module):
 class LatentActionDecoder(nn.Module):
     """Decoder that predicts next frames given previous frames and latent actions."""
 
-    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5):
+    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, latent_dim_actions=2):
         """
         Initialize the Latent Action Decoder.
 
@@ -122,7 +122,8 @@ class LatentActionDecoder(nn.Module):
 
         self.latent_head = Linear(embed_dim, latent_dim)
         self.fsq = FSQ(latent_dim=latent_dim, num_bins=2)
-        self.embedding_head = Linear(latent_dim, embed_dim)
+        self.embed_head_frames = Linear(latent_dim, embed_dim)
+        self.embed_head_actions = Linear(latent_dim_actions, embed_dim)
         self.unembedding_head = Linear(embed_dim, patch_size * patch_size * in_channels)
 
     def forward(self, x, actions):
@@ -152,11 +153,13 @@ class LatentActionDecoder(nn.Module):
         x = self.latent_head(x)     # (B, T, N, L)
         x = self.fsq(x)             # (B, T, N, L)
 
-        # Add action tokens for conditioning
-        x = x + actions.unsqueeze(2)          # (B, T, N, L)
-
         # Project back to embedding space
-        x = self.embedding_head(x)  # (B, T, N, P)
+        x = self.embed_head_frames(x)  # (B, T, N, P)
+        # Add action tokens for conditioning
+        x = x + self.embed_head_actions(actions).unsqueeze(2) # (B, T, N, P)
+
+        # PE + ST-Transformer
+        x = self.positional_encoding(x)  # (B, T, N, P)
         x = self.st_transformer_2(x)  # (B, T, N, P)
 
         # Project back to image space
@@ -178,7 +181,7 @@ class LatentActionModel(nn.Module):
     and the decoder predicts next frames conditioned on previous frames and actions.
     """
 
-    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5):
+    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, latent_dim_actions=2):
         """
         Initialize the Latent Action Model.
 
@@ -192,8 +195,8 @@ class LatentActionModel(nn.Module):
         """
         super().__init__()
 
-        self.encoder = LatentActionEncoder(img_size, patch_size, in_channels, num_frames, embed_dim, latent_dim)
-        self.decoder = LatentActionDecoder(img_size, patch_size, in_channels, num_frames-1, embed_dim, latent_dim)
+        self.encoder = LatentActionEncoder(img_size, patch_size, in_channels, num_frames, embed_dim, latent_dim_actions)
+        self.decoder = LatentActionDecoder(img_size, patch_size, in_channels, num_frames-1, embed_dim, latent_dim, latent_dim_actions)
 
     def forward(self, x):
         """

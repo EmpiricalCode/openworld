@@ -10,7 +10,7 @@ from core.model.spatial_temporal_transformer import STTransformer
 
 class DynamicsModel(nn.Module):
 
-    def __init__(self, num_patches_x, num_patches_y, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, num_iterations=25, num_bins=4, mask_schedule='cosine'):
+    def __init__(self, num_patches_x, num_patches_y, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, latent_dim_actions=2, num_iterations=25, num_bins=4, mask_schedule='cosine'):
         """
         Dynamics Model - decoder-only MaskGIT transformer for video token prediction.
         Takes continuous latent tokens + action embeddings, predicts discrete token IDs.
@@ -23,6 +23,7 @@ class DynamicsModel(nn.Module):
             num_frames: Number of frames to process. Default: 8
             embed_dim: Embedding dimension for transformer. Default: 128
             latent_dim: Dimension of the latent representation (codebook dimension). Default: 5
+            latent_dim_actions: Dimension of the latent action representation. Default: 2
             num_iterations: Number of MaskGIT decoding iterations at inference. Default: 25
             num_bins: Number of bins per latent dimension for quantization. Default: 4
             mask_schedule: Masking schedule function ('linear', 'cosine'). Default: 'cosine'
@@ -45,7 +46,9 @@ class DynamicsModel(nn.Module):
         # Learnable mask token (in latent space)
         self.mask_token = nn.Parameter(torch.randn(1, 1, 1, latent_dim) * 0.02)
 
-        self.embed_head = Linear(latent_dim, embed_dim)
+        self.embed_head_frames = Linear(latent_dim, embed_dim)
+        self.embed_head_actions = Linear(latent_dim_actions, embed_dim)
+
         self.positional_encoding = SpatioTemporalEncoding(
             num_patches_x=num_patches_x,
             num_patches_y=num_patches_y,
@@ -110,9 +113,10 @@ class DynamicsModel(nn.Module):
             mask_token = self.mask_token.expand(B, T, N, -1)  # (B, T, N, latent_dim)
             x_masked = torch.where(mask.unsqueeze(-1), mask_token, x)  # (B, T, N, latent_dim)
 
-            x_conditioned = x_masked + a.unsqueeze(2)  # Broadcast action to match patch dimension
+            x_embed_frames = self.embed_head_frames(x_masked)  # (B, T, N, embed_dim)
+            x_embed_actions = self.embed_head_actions(a)  # (B, T, N, embed_dim)
 
-            x_embed = self.embed_head(x_conditioned)  # (B, T, N, embed_dim)
+            x_embed = x_embed_frames + x_embed_actions.unsqueeze(2)  # (B, T, N, embed_dim) --> Simple additive conditioning
             x_pos = self.positional_encoding(x_embed)  # (B, T, N, embed_dim)
 
             x_transformed = self.st_transformer(x_pos)  # (B, T, N, embed_dim)
@@ -140,8 +144,10 @@ class DynamicsModel(nn.Module):
 
             for i in range(1, 1+self.num_iterations):
 
-                x_conditioned = x + a.unsqueeze(2)  # (B, T, N, latent_dim)
-                x_embed = self.embed_head(x_conditioned)  # (B, T, N, embed_dim)
+                x_embed_frames = self.embed_head_frames(x)  # (B, T, N, embed_dim)
+                x_embed_actions = self.embed_head_actions(a)  # (B, T, N, embed_dim)
+                x_embed = x_embed_frames + x_embed_actions.unsqueeze(2)  # (B, T, N, embed_dim) --> Simple additive conditioning
+
                 x_pos = self.positional_encoding(x_embed)  # (B, T, N, embed_dim)
 
                 x_transformed = self.st_transformer(x_pos)  # (B, T, N, embed_dim)
