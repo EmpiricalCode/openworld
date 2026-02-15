@@ -32,8 +32,7 @@ def visualize_reconstruction(checkpoint_path='checkpoints/video_tokenizer_epoch_
         patch_size=8,
         in_channels=3,
         num_frames=sequence_length,
-        embed_dim=128,
-        latent_dim=8
+        embed_dim=128
     ).to(device)
 
     # Load checkpoint
