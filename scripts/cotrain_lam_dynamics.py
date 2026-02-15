@@ -1,5 +1,8 @@
 import torch
 import torch.nn.functional as F
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 import h5py
 import numpy as np
 import sys
@@ -73,22 +76,36 @@ def train():
     img_size = (128, 128)
     patch_size = 8
     in_channels = 3
-    embed_dim = 96
+    embed_dim_lam = 96
+    embed_dim_dynamics = 128
     latent_dim = 5
     latent_dim_actions = 2
     num_bins = 4
 
     tokenizer_checkpoint = 'checkpoints/video_tokenizer_epoch_6.pt'
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    # DDP setup
+    ddp = 'LOCAL_RANK' in os.environ
+    if ddp:
+        dist.init_process_group(backend='nccl')
+        local_rank = int(os.environ['LOCAL_RANK'])
+        device = torch.device(f'cuda:{local_rank}')
+        torch.cuda.set_device(device)
+        is_main = local_rank == 0
+    else:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        is_main = True
+
+    if is_main:
+        print(f"Using device: {device}, DDP: {ddp}")
 
     # Dataset and dataloader
     dataset = VizdoomDataset(
         h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
         sequence_length=sequence_length
     )
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    sampler = DistributedSampler(dataset) if ddp else None
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, num_workers=0)
 
     num_patches = (img_size[0] // patch_size) * (img_size[1] // patch_size)
     num_patches_x = img_size[1] // patch_size
@@ -108,7 +125,8 @@ def train():
     for p in video_tokenizer.parameters():
         p.requires_grad = False
     video_tokenizer.eval()
-    print(f"Loaded frozen VideoTokenizer from {tokenizer_checkpoint}")
+    if is_main:
+        print(f"Loaded frozen VideoTokenizer from {tokenizer_checkpoint}")
 
     # LAM
     lam = LatentActionModel(
@@ -116,7 +134,7 @@ def train():
         patch_size=patch_size,
         in_channels=in_channels,
         num_frames=sequence_length,
-        embed_dim=embed_dim,
+        embed_dim=embed_dim_lam,
         latent_dim=latent_dim,
         latent_dim_actions=latent_dim_actions
     ).to(device)
@@ -127,11 +145,15 @@ def train():
         num_patches_y=num_patches_y,
         in_channels=in_channels,
         num_frames=sequence_length,
-        embed_dim=embed_dim,
+        embed_dim=embed_dim_dynamics,
         latent_dim=latent_dim,
         latent_dim_actions=latent_dim_actions,
         num_bins=num_bins
     ).to(device)
+
+    if ddp:
+        lam = DDP(lam, device_ids=[local_rank])
+        dynamics_model = DDP(dynamics_model, device_ids=[local_rank])
 
     # FSQ for converting latents to target indices (no trainable params)
     fsq = FSQ(latent_dim=latent_dim, num_bins=num_bins).to(device)
@@ -139,10 +161,11 @@ def train():
     lam_optimizer = torch.optim.Adam(lam.parameters(), lr=learning_rate)
     dynamics_optimizer = torch.optim.Adam(dynamics_model.parameters(), lr=learning_rate)
 
-    print(f"LAM parameters: {sum(p.numel() for p in lam.parameters()):,}")
-    print(f"DynamicsModel parameters: {sum(p.numel() for p in dynamics_model.parameters()):,}")
-    print(f"Starting training...")
-    print()
+    if is_main:
+        print(f"LAM parameters: {sum(p.numel() for p in lam.parameters()):,}")
+        print(f"DynamicsModel parameters: {sum(p.numel() for p in dynamics_model.parameters()):,}")
+        print(f"Starting training...")
+        print()
 
     os.makedirs('checkpoints', exist_ok=True)
 
@@ -154,6 +177,9 @@ def train():
 
         total_lam_loss = 0
         total_dynamics_loss = 0
+
+        if ddp:
+            sampler.set_epoch(epoch)
 
         for batch_idx, videos in enumerate(dataloader):
             batch_start_time = time.time()
@@ -192,30 +218,39 @@ def train():
             total_lam_loss += lam_loss.item()
             total_dynamics_loss += dynamics_loss.item()
 
-            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx}/{len(dataloader)}], "
-                  f"LAM Loss: {lam_loss.item():.6f}, Dynamics Loss: {dynamics_loss.item():.6f}, "
-                  f"Time: {batch_time:.3f}s")
+            if is_main:
+                print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx}/{len(dataloader)}], "
+                      f"LAM Loss: {lam_loss.item():.6f}, Dynamics Loss: {dynamics_loss.item():.6f}, "
+                      f"Time: {batch_time:.3f}s")
 
         avg_lam_loss = total_lam_loss / len(dataloader)
         avg_dynamics_loss = total_dynamics_loss / len(dataloader)
-        print(f"Epoch [{epoch+1}/{num_epochs}] Avg LAM Loss: {avg_lam_loss:.6f}, Avg Dynamics Loss: {avg_dynamics_loss:.6f}")
-        print()
 
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': lam.state_dict(),
-            'optimizer_state_dict': lam_optimizer.state_dict(),
-            'lam_loss': avg_lam_loss,
-        }, f'checkpoints/lam_epoch_{epoch+1}.pt')
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': dynamics_model.state_dict(),
-            'optimizer_state_dict': dynamics_optimizer.state_dict(),
-            'dynamics_loss': avg_dynamics_loss,
-        }, f'checkpoints/dynamics_epoch_{epoch+1}.pt')
-        print(f"Checkpoints saved: lam_epoch_{epoch+1}.pt, dynamics_epoch_{epoch+1}.pt")
-        print()
+        if is_main:
+            print(f"Epoch [{epoch+1}/{num_epochs}] Avg LAM Loss: {avg_lam_loss:.6f}, Avg Dynamics Loss: {avg_dynamics_loss:.6f}")
+            print()
+
+            # Unwrap DDP before saving
+            lam_state = lam.module.state_dict() if ddp else lam.state_dict()
+            dynamics_state = dynamics_model.module.state_dict() if ddp else dynamics_model.state_dict()
+
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': lam_state,
+                'optimizer_state_dict': lam_optimizer.state_dict(),
+                'lam_loss': avg_lam_loss,
+            }, f'checkpoints/lam_epoch_{epoch+1}.pt')
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': dynamics_state,
+                'optimizer_state_dict': dynamics_optimizer.state_dict(),
+                'dynamics_loss': avg_dynamics_loss,
+            }, f'checkpoints/dynamics_epoch_{epoch+1}.pt')
+            print(f"Checkpoints saved: lam_epoch_{epoch+1}.pt, dynamics_epoch_{epoch+1}.pt")
+            print()
 
 
 if __name__ == '__main__':
     train()
+    if dist.is_initialized():
+        dist.destroy_process_group()
