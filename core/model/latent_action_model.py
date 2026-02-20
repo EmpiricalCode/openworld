@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 
 from torch.nn import Linear
@@ -27,7 +28,7 @@ class LatentActionEncoder(nn.Module):
         self.patch_embedding = PatchEmbedding(img_size=img_size, patch_size=patch_size, in_channels=in_channels, embed_dim=embed_dim)
         self.st_transformer = STTransformer(
             embed_dim=embed_dim,
-            num_heads=4,
+            num_heads=8,
             num_blocks=4,
             num_patches_x=img_size[1] // patch_size,
             num_patches_y=img_size[0] // patch_size,
@@ -74,7 +75,7 @@ class LatentActionEncoder(nn.Module):
 class LatentActionDecoder(nn.Module):
     """Decoder that predicts next frames given previous frames and latent actions."""
 
-    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, latent_dim_actions=2):
+    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, latent_dim_actions=2, num_bins=4):
         """
         Initialize the Latent Action Decoder.
 
@@ -85,6 +86,7 @@ class LatentActionDecoder(nn.Module):
             num_frames: Number of frames in input video. Default: 8
             embed_dim: Embedding dimension. Default: 128
             latent_dim: Latent action dimension. Default: 5
+            num_bins: Number of FSQ bins for frame quantization. Default: 4
         """
         super().__init__()
 
@@ -121,10 +123,11 @@ class LatentActionDecoder(nn.Module):
         self.latent_dim = latent_dim
 
         self.latent_head = Linear(embed_dim, latent_dim)
-        self.fsq = FSQ(latent_dim=latent_dim, num_bins=2)
+        self.fsq = FSQ(latent_dim=latent_dim, num_bins=num_bins)
         self.embed_head_frames = Linear(latent_dim, embed_dim)
         self.embed_head_actions = Linear(latent_dim_actions, embed_dim)
         self.unembedding_head = Linear(embed_dim, patch_size * patch_size * in_channels)
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, 1, embed_dim))
 
     def forward(self, x, actions):
         """
@@ -142,7 +145,9 @@ class LatentActionDecoder(nn.Module):
                Each action conditions the prediction of the corresponding frame
 
         Returns:
-            Reconstructed video of shape (B, T, C, H, W)
+            reconstructed: Reconstructed video of shape (B, T, C, H, W)
+            patch_mask: Boolean mask of shape (B, T, N) where True = masked,
+                        or None if not training.
         """
         B, T, _, _, _ = x.shape
 
@@ -194,7 +199,7 @@ class LatentActionModel(nn.Module):
     and the decoder predicts next frames conditioned on previous frames and actions.
     """
 
-    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, latent_dim_actions=2):
+    def __init__(self, img_size=(128, 128), patch_size=8, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, latent_dim_actions=2, num_bins=4):
         """
         Initialize the Latent Action Model.
 
@@ -205,11 +210,12 @@ class LatentActionModel(nn.Module):
             num_frames: Number of frames in input video. Default: 8
             embed_dim: Embedding dimension. Default: 128
             latent_dim: Latent action dimension. Default: 5
+            num_bins: Number of FSQ bins for frame quantization. Default: 4
         """
         super().__init__()
 
         self.encoder = LatentActionEncoder(img_size, patch_size, in_channels, num_frames, embed_dim, latent_dim_actions)
-        self.decoder = LatentActionDecoder(img_size, patch_size, in_channels, num_frames-1, embed_dim, latent_dim, latent_dim_actions)
+        self.decoder = LatentActionDecoder(img_size, patch_size, in_channels, num_frames-1, embed_dim, latent_dim, latent_dim_actions, num_bins)
 
     def forward(self, x):
         """
