@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from core.model.components.attention import SpatialAttentionBlock, TemporalAttentionBlock
 from core.model.components.ffn import GeLU
-from core.model.components.norm import RMSNorm
+from core.model.components.norm import RMSNorm, AdaLN
 
 class STTransformerBlock(nn.Module):
 
@@ -48,6 +48,51 @@ class STTransformerBlock(nn.Module):
         x = x + self.ffn(self.norm_ffn(x))
 
         return x
+
+class STTransformerBlockAdaLN(nn.Module):
+    """ST-Transformer block with AdaLN conditioning at every norm."""
+
+    def __init__(self, embed_dim, num_heads, num_patches_x, num_patches_y, cond_dim):
+        super().__init__()
+        self.spatial_attn = SpatialAttentionBlock(embed_dim, num_heads, num_patches_x, num_patches_y, embed_dim)
+        self.temporal_attn = TemporalAttentionBlock(embed_dim, num_heads, num_patches_x, num_patches_y, embed_dim)
+        self.ffn = GeLU(embed_dim, embed_dim * 2)
+        self.adaln_spatial = AdaLN(embed_dim, cond_dim)
+        self.adaln_temporal = AdaLN(embed_dim, cond_dim)
+        self.adaln_ffn = AdaLN(embed_dim, cond_dim)
+
+    def forward(self, x, cond):
+        """
+        Args:
+            x:    (B, T, N, embed_dim)
+            cond: (B, T, cond_dim)
+        """
+        x = x + self.spatial_attn(self.adaln_spatial(x, cond))
+        x = x + self.temporal_attn(self.adaln_temporal(x, cond))
+        x = x + self.ffn(self.adaln_ffn(x, cond))
+        return x
+
+
+class STTransformerAdaLN(nn.Module):
+    """ST-Transformer with per-block AdaLN action conditioning."""
+
+    def __init__(self, embed_dim, num_heads, num_blocks, num_patches_x, num_patches_y, num_frames, cond_dim):
+        super().__init__()
+        self.transformer_blocks = nn.ModuleList([
+            STTransformerBlockAdaLN(embed_dim, num_heads, num_patches_x, num_patches_y, cond_dim)
+            for _ in range(num_blocks)
+        ])
+
+    def forward(self, x, cond):
+        """
+        Args:
+            x:    (B, T, N, embed_dim)
+            cond: (B, T, cond_dim)
+        """
+        for block in self.transformer_blocks:
+            x = block(x, cond)
+        return x
+
 
 class STTransformer(nn.Module):
     def __init__(self, embed_dim, num_heads, num_blocks, num_patches_x, num_patches_y, num_frames):
