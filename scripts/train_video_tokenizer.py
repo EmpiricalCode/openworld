@@ -84,7 +84,7 @@ class VizdoomDataset(Dataset):
 
 def train():
     # Hyperparameters
-    batch_size = 16  # Increased from 4 for better GPU utilization
+    batch_size = 32  # Increased from 4 for better GPU utilization
     num_epochs = 10
     learning_rate = 1e-4
     sequence_length = 16
@@ -107,8 +107,8 @@ def train():
 
     # Initialize model
     model = VideoTokenizer(
-        img_size=(128, 128),
-        patch_size=8,
+        img_size=(64, 64),
+        patch_size=4,
         in_channels=3,
         num_frames=sequence_length,
         embed_dim=128
