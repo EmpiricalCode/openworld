@@ -5,7 +5,7 @@ import numpy as np
 from torch.nn import Linear
 from core.model.components.positional_encoding import SpatioTemporalEncoding
 from core.model.components.quantization import FSQ
-from core.model.spatial_temporal_transformer import STTransformer
+from core.model.spatial_temporal_transformer import STTransformer, STTransformerAdaLN
 
 
 class DynamicsModel(nn.Module):
@@ -47,7 +47,6 @@ class DynamicsModel(nn.Module):
         self.mask_token = nn.Parameter(torch.randn(1, 1, 1, latent_dim) * 0.02)
 
         self.embed_head_frames = Linear(latent_dim, embed_dim)
-        self.embed_head_actions = Linear(latent_dim_actions, embed_dim)
 
         self.positional_encoding = SpatioTemporalEncoding(
             num_patches_x=num_patches_x,
@@ -56,14 +55,16 @@ class DynamicsModel(nn.Module):
             embed_dim=embed_dim
         )
 
-        # ST-Transformer with causal structure (decoder-only)
-        self.st_transformer = STTransformer(
+        # ST-Transformer with AdaLN action conditioning at every block
+        # Actions passed directly (no pre-embedding) — AdaLN.proj handles the projection
+        self.st_transformer = STTransformerAdaLN(
             embed_dim=embed_dim,
-            num_heads=4,
-            num_blocks=6,
+            num_heads=8,
+            num_blocks=8,
             num_patches_x=num_patches_x,
             num_patches_y=num_patches_y,
-            num_frames=num_frames
+            num_frames=num_frames,
+            cond_dim=latent_dim_actions
         )
 
         # Just used for converting latent to index and index to latent
@@ -114,12 +115,10 @@ class DynamicsModel(nn.Module):
             x_masked = torch.where(mask.unsqueeze(-1), mask_token, x)  # (B, T, N, latent_dim)
 
             x_embed_frames = self.embed_head_frames(x_masked)  # (B, T, N, embed_dim)
-            x_embed_actions = self.embed_head_actions(a)  # (B, T, N, embed_dim)
 
-            x_embed = x_embed_frames + x_embed_actions.unsqueeze(2)  # (B, T, N, embed_dim) --> Simple additive conditioning
-            x_pos = self.positional_encoding(x_embed)  # (B, T, N, embed_dim)
+            x_pos = self.positional_encoding(x_embed_frames)  # (B, T, N, embed_dim)
 
-            x_transformed = self.st_transformer(x_pos)  # (B, T, N, embed_dim)
+            x_transformed = self.st_transformer(x_pos, a)  # (B, T, N, embed_dim)
 
             x_predict = self.prediction_head(x_transformed)  # (B, T, N, num_bins^latent_dim)
 
@@ -145,12 +144,10 @@ class DynamicsModel(nn.Module):
             for i in range(1, 1+self.num_iterations):
 
                 x_embed_frames = self.embed_head_frames(x)  # (B, T, N, embed_dim)
-                x_embed_actions = self.embed_head_actions(a)  # (B, T, N, embed_dim)
-                x_embed = x_embed_frames + x_embed_actions.unsqueeze(2)  # (B, T, N, embed_dim) --> Simple additive conditioning
 
-                x_pos = self.positional_encoding(x_embed)  # (B, T, N, embed_dim)
+                x_pos = self.positional_encoding(x_embed_frames)  # (B, T, N, embed_dim)
 
-                x_transformed = self.st_transformer(x_pos)  # (B, T, N, embed_dim)
+                x_transformed = self.st_transformer(x_pos, a)  # (B, T, N, embed_dim)
 
                 x_predict = self.prediction_head(x_transformed)  # (B, T, N, num_bins^latent_dim)
                 x_probs = F.softmax(x_predict, dim=-1)  # (B, T, N, num_bins^latent_dim)
