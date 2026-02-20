@@ -149,6 +149,19 @@ class LatentActionDecoder(nn.Module):
         # Images to tokens
         x = self.patch_embedding(x)  # (B, T, N, P)
         x = self.positional_encoding(x)  # (B, T, N, P)
+
+        # During training, mask 25-75% of patches in frames 1..T-1
+        # Each frame position gets its own independently sampled mask ratio
+        patch_mask = None
+        N = x.shape[2]
+        # Sample a separate mask ratio for each frame position in 1..T-1: (T-1,)
+        frame_ratios = 0.25 + torch.rand(T - 1, device=x.device) * 0.5  # (T-1,)
+        rand = torch.rand(B, T - 1, N, device=x.device)
+        frame_mask = rand < frame_ratios.unsqueeze(0).unsqueeze(-1)  # (B, T-1, N)
+        no_mask = torch.zeros(B, 1, N, dtype=torch.bool, device=x.device)
+        patch_mask = torch.cat([no_mask, frame_mask], dim=1)  # (B, T, N)
+        x = torch.where(patch_mask.unsqueeze(-1), self.mask_token.expand(B, T, N, -1), x)
+
         x = self.st_transformer_1(x)  # (B, T, N, P)
         x = self.latent_head(x)     # (B, T, N, L)
         x = self.fsq(x)             # (B, T, N, L)
