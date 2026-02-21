@@ -106,10 +106,16 @@ class DynamicsModel(nn.Module):
             # Mask ratio sampled uniformly from [0.5, 1.0]
             mask_ratio = 0.5 + torch.rand(B, device=x.device) * 0.5  # (B,)
 
-            # Random mask for each patch (except for first frame)
-            unmask = torch.zeros(B, 1, N, dtype=torch.bool, device=x.device)
-            rest = torch.rand(B, T-1, N, device=x.device) < mask_ratio.reshape(B, 1, 1)
-            mask = torch.cat([unmask, rest], dim=1)  # (B, T, N)
+            # Random mask for all frames
+            mask = torch.rand(B, T, N, device=x.device) < mask_ratio.reshape(B, 1, 1)  # (B, T, N)
+
+            # Guarantee one unmasked anchor per (B, N) — random timestep, not always frame 0
+            anchor_t = torch.randint(0, T, (B, N), device=x.device)  # (B, N)
+            mask[
+                torch.arange(B, device=x.device).unsqueeze(1),
+                anchor_t,
+                torch.arange(N, device=x.device).unsqueeze(0)
+            ] = False
 
             mask_token = self.mask_token.expand(B, T, N, -1)  # (B, T, N, latent_dim)
             x_masked = torch.where(mask.unsqueeze(-1), mask_token, x)  # (B, T, N, latent_dim)
