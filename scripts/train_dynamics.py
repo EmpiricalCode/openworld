@@ -110,7 +110,7 @@ def train(resume=None):
 
     # Dataset and dataloader
     dataset = VizdoomDataset(
-        h5_path='/data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
+        h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
         sequence_length=sequence_length
     )
     sampler = DistributedSampler(dataset) if ddp else None
