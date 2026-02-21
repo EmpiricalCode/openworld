@@ -13,7 +13,7 @@ vol = modal.Volume.from_name("dream-rl-outputs", create_if_missing=True)
 
 sb = modal.Sandbox.create(
     image=image,
-    gpu="l40s",
+    gpu="l40s:2",
     timeout=3600 * 24,
     app=app,
     secrets=[github_secret],
