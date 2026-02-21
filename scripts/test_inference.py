@@ -41,45 +41,46 @@ def generate_video(dynamics_model, video_tokenizer, seed_latents, action_latent,
     """
     Autoregressively generate num_steps frames given seed latents and a fixed action.
 
+    Uses all 16 seed frames as initial context (matching training distribution where
+    the model always sees real latents at every position). Each generated frame replaces
+    the last context frame, sliding the window forward.
+
     Args:
-        seed_latents: (1, T_seed, N, latent_dim) — context frames to seed generation
+        seed_latents: (1, T_seed, N, latent_dim) — full window of context frames
         action_latent: (latent_dim_actions,) — fixed action to repeat
 
     Returns:
         frames: list of (H, W, C) uint8 numpy arrays
     """
+    num_frames = dynamics_model.num_frames  # 16
     N = seed_latents.shape[2]
-
-    # Decode seed frame to pixels for the output video
-    with torch.no_grad():
-        seed_pixels = video_tokenizer.decoder(seed_latents[:, :1])  # (1, 1, C, H, W)
-    frames = []
-    frame = seed_pixels[0, 0].permute(1, 2, 0).cpu().numpy()
-    frame = (frame.clip(0, 1) * 255).astype(np.uint8)
-    frames.append(frame)
-
-    num_frames = dynamics_model.num_frames
+    latent_dim = seed_latents.shape[-1]
     lam_latent_dim_actions = action_latent.shape[0]
     fixed_action = action_latent.reshape(1, -1).to(device)  # (1, L)
 
-    latent_dim = seed_latents.shape[-1]
-    x_input = torch.zeros(1, num_frames, N, latent_dim, device=device)
-    x_input[0, 0] = seed_latents[0, 0]  # seed frame at position 0
+    # Decode seed frames (first 15) into the output video
+    frames = []
+    with torch.no_grad():
+        for t in range(num_frames - 1):
+            px = video_tokenizer.decoder(seed_latents[:, t:t+1])  # (1, 1, C, H, W)
+            frame = px[0, 0].permute(1, 2, 0).cpu().numpy()
+            frame = (frame.clip(0, 1) * 255).astype(np.uint8)
+            frames.append(frame)
 
-    gen_idx = 1
+    # Start with full context window
+    x_input = seed_latents.clone()  # (1, 16, N, latent_dim)
 
     for step in range(num_steps):
-        # Build action tensor: null at 0, fixed_action at positions 1..gen_idx
+        # Actions: null at position 0, fixed_action at all other positions
         actions = torch.zeros(1, num_frames, lam_latent_dim_actions, device=device)
-        actions[0, 1:gen_idx + 1] = fixed_action
+        actions[0, 1:] = fixed_action
 
-        lengths = torch.tensor([gen_idx], dtype=torch.long, device=device)
+        # Generate next frame at position num_frames-1 (last slot)
+        # Use lengths = num_frames - 1 so the model generates at that index
+        lengths = torch.tensor([num_frames - 1], dtype=torch.long, device=device)
 
         with torch.no_grad():
             next_latent = dynamics_model(x_input.clone(), actions, lengths, training=False)  # (1, N, latent_dim)
-
-        # Place generated frame into x_input
-        x_input[0, gen_idx] = next_latent[0]
 
         # Decode to pixel frame
         with torch.no_grad():
@@ -91,12 +92,9 @@ def generate_video(dynamics_model, video_tokenizer, seed_latents, action_latent,
         if (step + 1) % 50 == 0:
             print(f"    Step {step + 1}/{num_steps}")
 
-        # Advance gen_idx; once window is full, slide everything left
-        gen_idx += 1
-        if gen_idx >= num_frames:
-            x_input[0, :-1] = x_input[0, 1:].clone()
-            x_input[0, -1] = 0
-            gen_idx = num_frames - 1
+        # Slide window: drop oldest frame, append generated frame
+        x_input[0, :-1] = x_input[0, 1:].clone()
+        x_input[0, -1] = next_latent[0]
 
     return frames
 
@@ -112,7 +110,7 @@ def save_video(frames, path, fps=10):
 
 def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
          h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
-         num_steps=300, output_dir='outputs/inference', seed=42, volume_name=None):
+         num_steps=100, output_dir='outputs/inference', seed=42, volume_name=None):
 
     # Config — must match training
     sequence_length = 16
@@ -184,19 +182,26 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
     # Load a seed sequence from the dataset
     print(f"Loading seed frames from {h5_path}...")
     rng = np.random.default_rng(seed)
+    num_seed = sequence_length - 1  # 15 seed frames, 16th slot is for generation
     with h5py.File(h5_path, 'r') as f:
         total_frames = f['frames'].shape[0]
-        start_idx = rng.integers(0, total_frames - sequence_length)
-        seed_frames = f['frames'][start_idx:start_idx + sequence_length]  # (T, H, W, C) uint8
+        start_idx = rng.integers(0, total_frames - num_seed)
+        seed_frames = f['frames'][start_idx:start_idx + num_seed]  # (15, H, W, C) uint8
 
-    print(f"Seed sequence starting at frame {start_idx}")
+    print(f"Seed sequence: frames {start_idx} to {start_idx + num_seed - 1} ({num_seed} frames)")
     seed_frames_f = seed_frames.astype(np.float32) / 255.0
-    seed_tensor = torch.from_numpy(seed_frames_f).permute(0, 3, 1, 2).unsqueeze(0).to(device)  # (1, T, C, H, W)
+    seed_tensor = torch.from_numpy(seed_frames_f).permute(0, 3, 1, 2).unsqueeze(0).to(device)  # (1, 15, C, H, W)
 
     with torch.no_grad():
-        seed_latents = video_tokenizer.encoder(seed_tensor)  # (1, T, N, latent_dim)
+        seed_latents_15 = video_tokenizer.encoder(seed_tensor)  # (1, 15, N, latent_dim)
 
-    print(f"Seed latents shape: {seed_latents.shape}")
+    # Pad to full 16-frame window (last slot will be overwritten by dynamics model)
+    N = seed_latents_15.shape[2]
+    latent_dim = seed_latents_15.shape[3]
+    seed_latents = torch.zeros(1, sequence_length, N, latent_dim, device=device)
+    seed_latents[:, :num_seed] = seed_latents_15
+
+    print(f"Seed latents shape: {seed_latents.shape} (15 real + 1 placeholder)")
 
     # Generate one video per action
     for game_action in range(4):
@@ -215,7 +220,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
         )
 
         out_path = os.path.join(output_dir, f'action_{game_action}_{action_name}.mp4')
-        save_video(video_frames, out_path, fps=30)
+        save_video(video_frames, out_path, fps=10)
 
     # Upload to Modal volume if requested
     if volume_name:
@@ -240,7 +245,7 @@ if __name__ == '__main__':
     parser.add_argument('--tokenizer', required=True, help='Path to video tokenizer checkpoint')
     parser.add_argument('--lam', required=True, help='Path to LAM checkpoint')
     parser.add_argument('--h5', default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
-    parser.add_argument('--steps', type=int, default=300)
+    parser.add_argument('--steps', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output-dir', default='outputs/inference')
     parser.add_argument('--volume', type=str, default=None, help='Modal volume name to upload videos to')
