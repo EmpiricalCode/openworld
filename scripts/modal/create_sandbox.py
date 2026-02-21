@@ -9,6 +9,7 @@ image = (
 )
 
 app = modal.App.lookup("my-sandbox", create_if_missing=True)
+vol = modal.Volume.from_name("dream-rl-outputs", create_if_missing=True)
 
 sb = modal.Sandbox.create(
     image=image,
@@ -16,6 +17,7 @@ sb = modal.Sandbox.create(
     timeout=3600 * 24,
     app=app,
     secrets=[github_secret],
+    volumes={"/outputs": vol},
 )
 
 def run(cmd):
