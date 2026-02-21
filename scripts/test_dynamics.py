@@ -206,7 +206,7 @@ if __name__ == '__main__':
     parser.add_argument('--dynamics', required=True, help='Path to dynamics checkpoint')
     parser.add_argument('--tokenizer', required=True, help='Path to video tokenizer checkpoint')
     parser.add_argument('--lam', required=True, help='Path to LAM checkpoint')
-    parser.add_argument('--h5', default='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5')
+    parser.add_argument('--h5', default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
     parser.add_argument('--seed', type=int, default=123)
     parser.add_argument('--out', default='dynamics_test.png')
     args = parser.parse_args()
