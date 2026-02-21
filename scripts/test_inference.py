@@ -221,13 +221,13 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
     if volume_name:
         import modal
         vol = modal.Volume.from_name(volume_name, create_if_missing=True)
-        for game_action in range(4):
-            action_name = ACTION_NAMES[game_action]
-            local_path = os.path.join(output_dir, f'action_{game_action}_{action_name}.mp4')
-            remote_path = f'inference/action_{game_action}_{action_name}.mp4'
-            with open(local_path, 'rb') as f:
-                vol.write_file(remote_path, f)
-            print(f"  Uploaded to volume: {remote_path}")
+        with vol.batch_upload() as batch:
+            for game_action in range(4):
+                action_name = ACTION_NAMES[game_action]
+                local_path = os.path.join(output_dir, f'action_{game_action}_{action_name}.mp4')
+                remote_path = f'/inference/action_{game_action}_{action_name}.mp4'
+                batch.put_file(local_path, remote_path)
+                print(f"  Uploaded to volume: {remote_path}")
         print(f"\nDownload with: modal volume get {volume_name} inference/ ./")
 
     print(f"\nDone. Videos saved to {output_dir}/")
