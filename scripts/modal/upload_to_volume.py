@@ -1,14 +1,19 @@
 """
 Upload inference videos to a Modal volume. Run this inside the sandbox.
-Usage: python scripts/modal/upload_to_volume.py
+Usage: python scripts/modal/upload_to_volume.py --volume dream-rl-outputs
 """
 import modal
 import os
+import argparse
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--volume', required=True, help='Modal volume name')
+    args = parser.parse_args()
+
     dir = 'outputs/inference'
-    volume = 'dream-rl-outputs'
+    volume = args.volume
 
     vol = modal.Volume.from_name(volume, create_if_missing=True)
 
