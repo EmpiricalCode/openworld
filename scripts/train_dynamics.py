@@ -70,7 +70,7 @@ class VizdoomDataset(Dataset):
 
 def train(resume=None):
     # Shared
-    batch_size = 16
+    batch_size = 32
     num_epochs = 10
     learning_rate = 1e-4
     sequence_length = 16
@@ -88,10 +88,10 @@ def train(resume=None):
     lam_latent_dim_actions = 3  # FSQ latent dim for action tokens
 
     # DynamicsModel
-    dynamics_embed_dim = 128
+    dynamics_embed_dim = 192
 
     tokenizer_checkpoint = 'checkpoints/video_tokenizer_epoch_6.pt'
-    lam_checkpoint = 'checkpoints/lam_epoch_7.pt'
+    lam_checkpoint = 'checkpoints/lam_epoch_3.pt'
 
     # DDP setup
     ddp = 'LOCAL_RANK' in os.environ
@@ -110,7 +110,7 @@ def train(resume=None):
 
     # Dataset and dataloader
     dataset = VizdoomDataset(
-        h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5',
+        h5_path='/data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
         sequence_length=sequence_length
     )
     sampler = DistributedSampler(dataset) if ddp else None
