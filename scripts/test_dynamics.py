@@ -41,7 +41,7 @@ def test(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
     tokenizer_num_bins = 4
     lam_embed_dim = 128
     lam_latent_dim_actions = 3
-    dynamics_embed_dim = 128
+    dynamics_embed_dim = 192
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
