@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from core.model.components.attention import SpatialAttentionBlock, TemporalAttentionBlock
-from core.model.components.ffn import GeLU
+from core.model.components.ffn import GeLU, SwiGLU
 from core.model.components.norm import RMSNorm, AdaLN
 
 class STTransformerBlock(nn.Module):
@@ -56,7 +56,7 @@ class STTransformerBlockAdaLN(nn.Module):
         super().__init__()
         self.spatial_attn = SpatialAttentionBlock(embed_dim, num_heads, num_patches_x, num_patches_y, embed_dim)
         self.temporal_attn = TemporalAttentionBlock(embed_dim, num_heads, num_patches_x, num_patches_y, embed_dim)
-        self.ffn = GeLU(embed_dim, embed_dim * 2)
+        self.ffn = SwiGLU(embed_dim, embed_dim * 2)
         self.adaln_spatial = AdaLN(embed_dim, cond_dim)
         self.adaln_temporal = AdaLN(embed_dim, cond_dim)
         self.adaln_ffn = AdaLN(embed_dim, cond_dim)

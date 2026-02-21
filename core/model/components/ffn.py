@@ -1,5 +1,5 @@
 import torch.nn as nn
-
+import torch.nn.functional as F
 
 
 class GeLU(nn.Module):
@@ -19,7 +19,7 @@ class GeLU(nn.Module):
     def forward(self, x):
         """
         Forward pass through the FFN.
-        
+
         Args:
             x: Input tensor of shape (B, T, N, P) where:
                B = batch size
@@ -33,5 +33,23 @@ class GeLU(nn.Module):
         x = self.fc1(x)
         x = self.activation(x)
         x = self.fc2(x)
-        
+
         return x
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, embed_dim, hidden_dim):
+        """
+        SwiGLU Feed-Forward Network.
+
+        Args:
+            embed_dim: Embedding dimension
+            hidden_dim: Hidden layer dimension
+        """
+        super().__init__()
+        self.w_up = nn.Linear(embed_dim, hidden_dim)
+        self.w_gate = nn.Linear(embed_dim, hidden_dim)
+        self.w_down = nn.Linear(hidden_dim, embed_dim)
+
+    def forward(self, x):
+        return self.w_down(F.silu(self.w_gate(x)) * self.w_up(x))
