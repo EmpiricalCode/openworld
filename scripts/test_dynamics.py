@@ -145,24 +145,18 @@ def test(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
         T = sequence_length
         N = latents_gt.shape[2]
 
-        # Autoregressive prediction: frame 0 is always the real seed
-        # x_input accumulates real frames as context up to gen_idx-1, then generates gen_idx
-        x_input = latents_gt.clone()  # start with all real latents
-
+        # Teacher-forced prediction: always use ground-truth context
         predicted_latents = []  # will hold T-1 predicted frames (indices 1..15)
 
         for gen_idx in range(1, T):
-            # Replace frames gen_idx..T-1 with zeros (only context 0..gen_idx-1 is real)
-            x_ctx = x_input.clone()
+            # Use all ground-truth frames as context, zero out gen_idx onward
+            x_ctx = latents_gt.clone()
             x_ctx[0, gen_idx:] = 0.0
 
             lengths = torch.tensor([gen_idx], dtype=torch.long, device=device)
 
             pred = dynamics_model(x_ctx, a_shifted, lengths, training=False)  # (1, N, latent_dim)
             predicted_latents.append(pred)
-
-            # Feed prediction back as context for next step
-            x_input[0, gen_idx] = pred[0]
 
             print(f"  Generated frame {gen_idx}/{T-1}")
 
@@ -172,24 +166,30 @@ def test(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
             px = video_tokenizer.decoder(pred_lat.unsqueeze(1))  # (1, 1, C, H, W)
             predicted_pixels.append(px[0, 0].permute(1, 2, 0).cpu().numpy())
 
-        # Decode ground truth frames 1..T-1 for comparison
+        # Decode ground truth frames 0..T-1 for comparison
         gt_pixels = []
-        for t in range(1, T):
+        for t in range(T):
             px = video_tokenizer.decoder(latents_gt[:, t:t+1])  # (1, 1, C, H, W)
             gt_pixels.append(px[0, 0].permute(1, 2, 0).cpu().numpy())
 
     # Build comparison grid: row 0 = ground truth, row 1 = predictions
-    num_cols = T - 1  # 15 frames
+    num_cols = T
     fig, axes = plt.subplots(2, num_cols, figsize=(num_cols * 1.5, 3))
     fig.suptitle('Ground Truth (top) vs Dynamics Predictions (bottom)', fontsize=10)
+
+    action_labels_full = ['seed'] + action_labels  # frame 0 has no action
 
     for t in range(num_cols):
         axes[0, t].imshow(np.clip(gt_pixels[t], 0, 1))
         axes[0, t].axis('off')
-        axes[0, t].set_title(f't={t+1}\n{action_labels[t]}', fontsize=6)
+        axes[0, t].set_title(f't={t}\n{action_labels_full[t]}', fontsize=6)
 
-        axes[1, t].imshow(np.clip(predicted_pixels[t], 0, 1))
-        axes[1, t].axis('off')
+        if t == 0:
+            # No prediction for frame 0 — blank
+            axes[1, t].axis('off')
+        else:
+            axes[1, t].imshow(np.clip(predicted_pixels[t - 1], 0, 1))
+            axes[1, t].axis('off')
 
     axes[0, 0].set_ylabel('GT', fontsize=8)
     axes[1, 0].set_ylabel('Pred', fontsize=8)
