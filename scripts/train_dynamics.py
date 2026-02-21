@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn.functional as F
 import torch.distributed as dist
@@ -173,13 +174,41 @@ def train(resume=None):
     # FSQ for converting tokenizer latents to target indices (no trainable params)
     fsq = FSQ(latent_dim=tokenizer_latent_dim, num_bins=tokenizer_num_bins).to(device)
 
-    dynamics_optimizer = torch.optim.Adam(dynamics_model.parameters(), lr=learning_rate)
+    # Separate params: no weight decay on biases and norm weights
+    decay_params = []
+    no_decay_params = []
+    for name, param in dynamics_model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if param.ndim <= 1 or name.endswith('.bias'):
+            no_decay_params.append(param)
+        else:
+            decay_params.append(param)
+
+    dynamics_optimizer = torch.optim.AdamW([
+        {'params': decay_params, 'weight_decay': 0.01},
+        {'params': no_decay_params, 'weight_decay': 0.0},
+    ], lr=learning_rate)
+
+    # Warmup + cosine LR schedule
+    warmup_steps = 500
+    total_steps = num_epochs * len(dataloader)
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / warmup_steps
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        min_lr_ratio = 0.1  # floor at 10% of peak LR
+        return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(dynamics_optimizer, lr_lambda)
 
     start_epoch = 0
     if resume:
         ckpt = torch.load(resume, map_location=device)
         (dynamics_model.module if ddp else dynamics_model).load_state_dict(ckpt['model_state_dict'])
         dynamics_optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        if 'scheduler_state_dict' in ckpt:
+            scheduler.load_state_dict(ckpt['scheduler_state_dict'])
         start_epoch = ckpt['epoch'] + 1
         if is_main:
             print(f"Resumed from {resume} (epoch {ckpt['epoch']+1})")
@@ -227,7 +256,9 @@ def train(resume=None):
             # Step E: backward
             dynamics_optimizer.zero_grad()
             dynamics_loss.backward()
+            torch.nn.utils.clip_grad_norm_(dynamics_model.parameters(), max_norm=1.0)
             dynamics_optimizer.step()
+            scheduler.step()
 
             batch_time = time.time() - batch_start_time
             total_dynamics_loss += dynamics_loss.item()
@@ -248,6 +279,7 @@ def train(resume=None):
                 'epoch': epoch,
                 'model_state_dict': dynamics_state,
                 'optimizer_state_dict': dynamics_optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'dynamics_loss': avg_dynamics_loss,
             }, f'checkpoints/dynamics_epoch_{epoch+1}.pt')
             print(f"Checkpoint saved: dynamics_epoch_{epoch+1}.pt")
