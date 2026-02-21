@@ -26,12 +26,13 @@ GAME_ACTION_TO_LAM_TOKEN = {0: 6, 1: 5, 2: 0, 3: 3}
 
 def lam_token_for_action(game_action, lam, device):
     """
-    Returns the FSQ latent vector for a given game action using the LAM's quantizer.
+    Returns the FSQ latent vector for a given game action using the LAM encoder's FSQ.
     """
     lam_token_idx = GAME_ACTION_TO_LAM_TOKEN[game_action]
-    num_codes = lam.action_quantizer.num_bins ** lam.action_quantizer.latent_dim
+    fsq = lam.encoder.fsq
+    num_codes = fsq.num_bins ** fsq.latent_dim
     all_indices = torch.arange(num_codes, device=device)
-    all_latents = lam.action_quantizer.index_to_latent(all_indices.unsqueeze(0))  # (1, num_codes, latent_dim)
+    all_latents = fsq.index_to_latent(all_indices.unsqueeze(0))  # (1, num_codes, latent_dim)
     return all_latents[0, lam_token_idx]  # (latent_dim_actions,)
 
 
