@@ -177,7 +177,7 @@ def train():
             batch_time = time.time() - batch_start_time
             total_loss += dynamics_loss.item()
 
-            if batch_idx % 100 == 0:
+            if batch_idx % 10 == 0:
                 print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx}/{len(dataloader)}], "
                       f"Loss: {dynamics_loss.item():.6f}, Time: {batch_time:.3f}s")
 
