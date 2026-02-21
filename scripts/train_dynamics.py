@@ -202,6 +202,9 @@ def train(resume=None):
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(dynamics_optimizer, lr_lambda)
 
+    # Mixed precision (bf16 — no scaler needed, same dynamic range as fp32)
+    use_amp = device.type == 'cuda'
+
     start_epoch = 0
     if resume:
         ckpt = torch.load(resume, map_location=device)
@@ -235,7 +238,7 @@ def train(resume=None):
             B = videos.shape[0]
             videos = videos.to(device)  # (B, T, C, H, W)
 
-            with torch.no_grad():
+            with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=use_amp):
                 # Step A: get latents from frozen tokenizer
                 latents = video_tokenizer.encoder(videos)  # (B, T, N, latent_dim)
 
@@ -251,7 +254,8 @@ def train(resume=None):
             lengths = torch.full((B,), T, dtype=torch.long, device=device)
 
             # Step D: dynamics forward + loss
-            _, dynamics_loss = dynamics_model(latents, a_shifted, lengths, targets=targets, training=True)
+            with torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=use_amp):
+                _, dynamics_loss = dynamics_model(latents, a_shifted, lengths, targets=targets, training=True)
 
             # Step E: backward
             dynamics_optimizer.zero_grad()
