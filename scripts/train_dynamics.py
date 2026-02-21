@@ -89,7 +89,7 @@ def train(resume=None):
     lam_latent_dim_actions = 3  # FSQ latent dim for action tokens
 
     # DynamicsModel
-    dynamics_embed_dim = 192
+    dynamics_embed_dim = 264
 
     tokenizer_checkpoint = 'checkpoints/video_tokenizer_epoch_6.pt'
     lam_checkpoint = 'checkpoints/lam_epoch_3.pt'
