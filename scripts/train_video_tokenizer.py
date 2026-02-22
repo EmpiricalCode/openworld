@@ -1,5 +1,8 @@
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 import h5py
 import numpy as np
 import sys
@@ -47,7 +50,7 @@ class VizdoomDataset(Dataset):
                     self.valid_indices.append(i)
 
         print(f"Dataset loaded: {self.total_frames} total frames")
-        print(f"Frame shape: {self.frames.shape[1:]}")  # (128, 128, 3)
+        print(f"Frame shape: {self.frames.shape[1:]}")
         print(f"Number of episodes: {len(episode_starts)}")
         print(f"Creating sequences of length {sequence_length}")
         print(f"Total valid sequences (respecting episode boundaries): {len(self.valid_indices)}")
@@ -63,16 +66,9 @@ class VizdoomDataset(Dataset):
 
         Returns:
             torch.Tensor: Video sequence of shape (T, C, H, W)
-                         T = sequence_length
-                         C = 3 (RGB)
-                         H = 128
-                         W = 128
         """
-        # Get the actual frame index from valid indices
         start_idx = self.valid_indices[idx]
-
-        # Get sequence of frames from in-memory array
-        frames = self.frames[start_idx:start_idx + self.sequence_length]  # (T, H, W, C)
+        frames = self.frames[start_idx:start_idx + self.sequence_length]
 
         # Convert to float and normalize to [0, 1]
         frames = frames.astype(np.float32) / 255.0
@@ -82,28 +78,35 @@ class VizdoomDataset(Dataset):
 
         return frames
 
-def train(h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5'):
+def train(h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', resume=None):
     # Hyperparameters
-    batch_size = 32  # Increased from 4 for better GPU utilization
+    batch_size = 32
     num_epochs = 10
     learning_rate = 1e-4
     sequence_length = 16
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    # DDP setup
+    ddp = 'LOCAL_RANK' in os.environ
+    if ddp:
+        dist.init_process_group(backend='nccl')
+        local_rank = int(os.environ['LOCAL_RANK'])
+        device = torch.device(f'cuda:{local_rank}')
+        torch.cuda.set_device(device)
+        is_main = local_rank == 0
+    else:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        is_main = True
+
+    if is_main:
+        print(f"Using device: {device}, DDP: {ddp}")
 
     # Create dataset and dataloader
     dataset = VizdoomDataset(
         h5_path=h5_path,
         sequence_length=sequence_length
     )
-
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0
-    )
+    sampler = DistributedSampler(dataset) if ddp else None
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, num_workers=0)
 
     # Initialize model
     model = VideoTokenizer(
@@ -114,21 +117,37 @@ def train(h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
         embed_dim=128
     ).to(device)
 
+    if ddp:
+        model = DDP(model, device_ids=[local_rank])
+
     # Loss and optimizer
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"Starting training...")
-    print()
+    start_epoch = 0
+    if resume:
+        ckpt = torch.load(resume, map_location=device)
+        (model.module if ddp else model).load_state_dict(ckpt['model_state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        start_epoch = ckpt['epoch'] + 1
+        if is_main:
+            print(f"Resumed from {resume} (epoch {ckpt['epoch']+1})")
+
+    if is_main:
+        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"Starting training...")
+        print()
 
     # Create checkpoint directory
     os.makedirs('checkpoints', exist_ok=True)
 
     # Training loop
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         model.train()
         total_loss = 0
+
+        if ddp:
+            sampler.set_epoch(epoch)
 
         for batch_idx, videos in enumerate(dataloader):
             batch_start_time = time.time()
@@ -147,25 +166,31 @@ def train(h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
             batch_time = time.time() - batch_start_time
             total_loss += loss.item()
 
-            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx}/{len(dataloader)}], Loss: {loss.item():.6f}, Time: {batch_time:.3f}s")
+            if is_main:
+                print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx}/{len(dataloader)}], Loss: {loss.item():.6f}, Time: {batch_time:.3f}s")
 
-        avg_loss = total_loss / len(dataloader)
-        print(f"Epoch [{epoch+1}/{num_epochs}] Average Loss: {avg_loss:.6f}")
-        print()
+        if is_main:
+            avg_loss = total_loss / len(dataloader)
+            print(f"Epoch [{epoch+1}/{num_epochs}] Average Loss: {avg_loss:.6f}")
+            print()
 
-        # Save checkpoint
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': avg_loss,
-        }, f'checkpoints/video_tokenizer_epoch_{epoch+1}.pt')
-        print(f"Checkpoint saved: checkpoints/video_tokenizer_epoch_{epoch+1}.pt")
-        print()
+            # Save checkpoint
+            model_state = model.module.state_dict() if ddp else model.state_dict()
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model_state,
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': avg_loss,
+            }, f'checkpoints/video_tokenizer_epoch_{epoch+1}.pt')
+            print(f"Checkpoint saved: checkpoints/video_tokenizer_epoch_{epoch+1}.pt")
+            print()
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
+    parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     args = parser.parse_args()
-    train(h5_path=args.data)
+    train(h5_path=args.data, resume=args.resume)
+    if dist.is_initialized():
+        dist.destroy_process_group()
