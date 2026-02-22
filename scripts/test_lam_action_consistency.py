@@ -154,4 +154,4 @@ if __name__ == '__main__':
     parser.add_argument('--data', default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
     parser.add_argument('--num-sequences', type=int, default=500)
     args = parser.parse_args()
-    test_action_consistency(args.lam, args.h5, args.num_sequences)
+    test_action_consistency(args.lam, args.data, args.num_sequences)
