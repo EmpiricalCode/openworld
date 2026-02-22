@@ -60,7 +60,7 @@ class VizdoomDataset(Dataset):
         return frames, game_actions
 
 
-def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5', num_actions=4, num_epochs=10):
+def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5', num_actions=4, num_epochs=10, sup_weight=1.0):
     batch_size = 32
     learning_rate = 1e-4
     sequence_length = 16
@@ -156,7 +156,7 @@ def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgatheri
             labels = game_actions[:, 1:]                 # (B, T-1)
             supervised_loss = F.cross_entropy(logits.reshape(-1, num_actions), labels.reshape(-1))
 
-            loss = recon_loss + supervised_loss
+            loss = recon_loss + sup_weight * supervised_loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -200,7 +200,8 @@ if __name__ == '__main__':
     parser.add_argument('--data', type=str, default='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5')
     parser.add_argument('--num-actions', type=int, default=4, help='Number of game actions (4 for HealthGathering, 3 for TakeCover)')
     parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--sup-weight', type=float, default=1.0)
     args = parser.parse_args()
-    train(resume=args.resume, h5_path=args.data, num_actions=args.num_actions, num_epochs=args.epochs)
+    train(resume=args.resume, h5_path=args.data, num_actions=args.num_actions, num_epochs=args.epochs, sup_weight=args.sup_weight)
     if dist.is_initialized():
         dist.destroy_process_group()
