@@ -1,8 +1,10 @@
 """
-Teacher-forced inference: slide a 16-frame window along a ground truth sequence,
-predicting each next frame from real context (no autoregressive error compounding).
+Teacher-forced inference: slide a 16-frame window of ground truth pixels,
+encode each window through tokenizer + LAM, predict the 16th frame via MaskGIT,
+decode it, and append to the output video.
 
-Produces two videos side-by-side: ground truth (left) and predicted (right).
+Produces side-by-side video: ground truth (left) vs predicted (right).
+First 15 frames are ground truth only (no prediction yet).
 """
 import torch
 import numpy as np
@@ -18,64 +20,11 @@ from core.model.latent_action_model import LatentActionModel
 from core.model.dynamics_model import DynamicsModel
 
 
-def generate_teacher_forced(dynamics_model, video_tokenizer, lam,
-                            all_latents, all_actions, device):
-    """
-    Teacher-forced generation: for each frame t >= 15, predict it using
-    ground truth frames [t-15, ..., t-1] as context.
-
-    Args:
-        all_latents: (1, T_total, N, latent_dim) — tokenizer latents for full sequence
-        all_actions: (1, T_total-1, latent_dim_actions) — LAM actions for full sequence
-
-    Returns:
-        gt_frames: list of (H, W, C) uint8 — ground truth decoded frames (from frame 15 onward)
-        pred_frames: list of (H, W, C) uint8 — predicted frames
-    """
-    num_frames = dynamics_model.num_frames  # 16
-    T_total = all_latents.shape[1]
-    N = all_latents.shape[2]
-    lam_latent_dim_actions = all_actions.shape[-1]
-
-    gt_frames = []
-    pred_frames = []
-
-    with torch.no_grad():
-        for t in range(num_frames - 1, T_total):
-            # Context: ground truth frames [t-15, ..., t-1] + placeholder at position 15
-            ctx_start = t - (num_frames - 1)
-            x_input = all_latents[:, ctx_start:ctx_start + num_frames].clone()  # (1, 16, N, latent_dim)
-
-            # Actions: null at position 0, then real actions for positions 1..15
-            actions = torch.zeros(1, num_frames, lam_latent_dim_actions, device=device)
-            # all_actions[:, i] is the action between frame i and frame i+1
-            # positions 1..15 in the window correspond to dataset frames ctx_start+1 .. ctx_start+15
-            # action for window position j is all_actions[:, ctx_start + j - 1]
-            for j in range(1, num_frames):
-                action_idx = ctx_start + j - 1
-                if action_idx < all_actions.shape[1]:
-                    actions[:, j] = all_actions[:, action_idx]
-
-            # Predict frame at position 15 (last slot)
-            lengths = torch.tensor([num_frames - 1], dtype=torch.long, device=device)
-            pred_latent = dynamics_model(x_input, actions, lengths, training=False)  # (1, N, latent_dim)
-
-            # Decode predicted frame
-            pred_px = video_tokenizer.decoder(pred_latent.unsqueeze(1))  # (1, 1, C, H, W)
-            pred_frame = pred_px[0, 0].permute(1, 2, 0).cpu().numpy()
-            pred_frame = (pred_frame.clip(0, 1) * 255).astype(np.uint8)
-            pred_frames.append(pred_frame)
-
-            # Decode ground truth frame
-            gt_px = video_tokenizer.decoder(all_latents[:, t:t+1])  # (1, 1, C, H, W)
-            gt_frame = gt_px[0, 0].permute(1, 2, 0).cpu().numpy()
-            gt_frame = (gt_frame.clip(0, 1) * 255).astype(np.uint8)
-            gt_frames.append(gt_frame)
-
-            if (len(pred_frames)) % 50 == 0:
-                print(f"    Generated {len(pred_frames)} frames...")
-
-    return gt_frames, pred_frames
+def decode_frame(video_tokenizer, latent):
+    """Decode a single latent frame to uint8 numpy. latent: (1, 1, N, latent_dim)"""
+    px = video_tokenizer.decoder(latent)  # (1, 1, C, H, W)
+    frame = px[0, 0].permute(1, 2, 0).cpu().numpy()
+    return (frame.clip(0, 1) * 255).astype(np.uint8)
 
 
 def save_video(frames, path, fps=10):
@@ -168,8 +117,9 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
     print(f"  Epoch: {ckpt['epoch'] + 1}, Dynamics loss: {ckpt['dynamics_loss']:.6f}")
     print()
 
-    # Load a contiguous sequence from the dataset
-    total_needed = num_steps + (sequence_length - 1)  # need 15 context + num_steps frames to predict
+    # Load contiguous ground truth frames
+    # Need 15 context + num_steps frames to predict = 15 + num_steps total
+    total_needed = num_steps + (sequence_length - 1)
     print(f"Loading {total_needed} contiguous frames from {h5_path}...")
     rng = np.random.default_rng(seed)
     with h5py.File(h5_path, 'r') as f:
@@ -179,29 +129,55 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
 
     print(f"Sequence: frames {start_idx} to {start_idx + total_needed - 1}")
 
-    # Encode all frames through tokenizer and LAM
-    # Process in chunks of sequence_length to stay within model's expected input size
     frames_f = raw_frames.astype(np.float32) / 255.0
-    frames_tensor = torch.from_numpy(frames_f).permute(0, 3, 1, 2).unsqueeze(0).to(device)  # (1, T_total, C, H, W)
+    frames_tensor = torch.from_numpy(frames_f).permute(0, 3, 1, 2).to(device)  # (T_total, C, H, W)
 
-    print("Encoding frames through tokenizer and LAM...")
+    gt_frames = []
+    pred_frames = []
+
+    # First 15 frames: ground truth only (no prediction possible yet)
+    print("Decoding first 15 ground truth frames...")
     with torch.no_grad():
-        all_latents = video_tokenizer.encoder(frames_tensor)  # (1, T_total, N, latent_dim)
-        _, all_actions = lam(frames_tensor)  # (1, T_total-1, latent_dim_actions)
+        for t in range(sequence_length - 1):
+            frame = (frames_f[t] * 255).astype(np.uint8)  # (H, W, C) — already in HWC
+            gt_frames.append(frame)
+            pred_frames.append(frame)  # mirror GT for side-by-side alignment
 
-    print(f"Latents: {all_latents.shape}, Actions: {all_actions.shape}")
-    print()
+    # Sliding window: for each step, take 16 GT frames, encode, predict 16th, decode
+    print(f"Running teacher-forced generation for {num_steps} steps...")
+    with torch.no_grad():
+        for step in range(num_steps):
+            # Window of 16 ground truth pixel frames
+            t = step + (sequence_length - 1)  # index of the frame we're predicting
+            window_start = step
+            window = frames_tensor[window_start:window_start + sequence_length].unsqueeze(0)  # (1, 16, C, H, W)
 
-    # Generate teacher-forced predictions
-    print("Running teacher-forced generation...")
-    gt_frames, pred_frames = generate_teacher_forced(
-        dynamics_model=dynamics_model,
-        video_tokenizer=video_tokenizer,
-        lam=lam,
-        all_latents=all_latents,
-        all_actions=all_actions,
-        device=device
-    )
+            # Encode through tokenizer to get latents for all 16 frames
+            latents = video_tokenizer.encoder(window)  # (1, 16, N, latent_dim)
+
+            # Get actions from LAM for this window
+            _, actions_raw = lam(window)  # (1, 15, latent_dim_actions)
+
+            # Build action tensor: null at position 0, then LAM actions at 1..15
+            actions = torch.zeros(1, sequence_length, lam_latent_dim_actions, device=device)
+            actions[:, 1:] = actions_raw
+
+            # Predict the 16th frame (index 15) via MaskGIT
+            lengths = torch.tensor([sequence_length - 1], dtype=torch.long, device=device)
+            pred_latent = dynamics_model(latents, actions, lengths, training=False)  # (1, N, latent_dim)
+
+            # Decode predicted frame
+            pred_frame = decode_frame(video_tokenizer, pred_latent.unsqueeze(1))
+            pred_frames.append(pred_frame)
+
+            # Ground truth frame at position t
+            gt_frame = (frames_f[t] * 255).astype(np.uint8)
+            gt_frames.append(gt_frame)
+
+            if (step + 1) % 50 == 0:
+                print(f"    Step {step + 1}/{num_steps}")
+
+    print(f"Total frames: {len(gt_frames)} ({sequence_length - 1} context + {num_steps} predicted)")
 
     # Save videos
     save_side_by_side(gt_frames, pred_frames,
