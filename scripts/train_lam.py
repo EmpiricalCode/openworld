@@ -60,7 +60,7 @@ class VizdoomDataset(Dataset):
         return frames, game_actions
 
 
-def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5'):
+def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5', num_actions=4):
     batch_size = 32
     num_epochs = 10
     learning_rate = 1e-4
@@ -111,7 +111,7 @@ def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgatheri
         lam = DDP(lam, device_ids=[local_rank])
 
     # Small classifier: maps action latents -> game action logits
-    action_classifier = torch.nn.Linear(lam_latent_dim_actions, 4).to(device)
+    action_classifier = torch.nn.Linear(lam_latent_dim_actions, num_actions).to(device)
 
     optimizer = torch.optim.Adam(list(lam.parameters()) + list(action_classifier.parameters()), lr=learning_rate)
 
@@ -151,9 +151,9 @@ def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgatheri
             recon_loss = F.mse_loss(reconstructed, videos[:, 1:])
 
             # Supervised loss on all samples
-            logits = action_classifier(actions)          # (B, T-1, 4)
-            labels = game_actions[:, :-1]                # (B, T-1)
-            supervised_loss = F.cross_entropy(logits.reshape(-1, 4), labels.reshape(-1))
+            logits = action_classifier(actions)          # (B, T-1, num_actions)
+            labels = game_actions[:, 1:]                 # (B, T-1)
+            supervised_loss = F.cross_entropy(logits.reshape(-1, num_actions), labels.reshape(-1))
 
             loss = recon_loss + supervised_loss
 
@@ -196,7 +196,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--data', type=str, default='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5')
+    parser.add_argument('--num-actions', type=int, default=4, help='Number of game actions (4 for HealthGathering, 3 for TakeCover)')
     args = parser.parse_args()
-    train(resume=args.resume, h5_path=args.data)
+    train(resume=args.resume, h5_path=args.data, num_actions=args.num_actions)
     if dist.is_initialized():
         dist.destroy_process_group()
