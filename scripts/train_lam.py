@@ -60,7 +60,7 @@ class VizdoomDataset(Dataset):
         return frames, game_actions
 
 
-def train(resume=None):
+def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5'):
     batch_size = 32
     num_epochs = 10
     learning_rate = 1e-4
@@ -90,7 +90,7 @@ def train(resume=None):
         print(f"Using device: {device}, DDP: {ddp}")
 
     dataset = VizdoomDataset(
-        h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5',
+        h5_path=h5_path,
         sequence_length=sequence_length
     )
     sampler = DistributedSampler(dataset) if ddp else None
@@ -195,7 +195,8 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
+    parser.add_argument('--data', type=str, default='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5')
     args = parser.parse_args()
-    train(resume=args.resume)
+    train(resume=args.resume, h5_path=args.data)
     if dist.is_initialized():
         dist.destroy_process_group()

@@ -82,7 +82,7 @@ class VizdoomDataset(Dataset):
 
         return frames
 
-def train():
+def train(h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5'):
     # Hyperparameters
     batch_size = 32  # Increased from 4 for better GPU utilization
     num_epochs = 10
@@ -94,7 +94,7 @@ def train():
 
     # Create dataset and dataloader
     dataset = VizdoomDataset(
-        h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
+        h5_path=h5_path,
         sequence_length=sequence_length
     )
 
@@ -164,4 +164,8 @@ def train():
         print()
 
 if __name__ == '__main__':
-    train()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data', type=str, default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
+    args = parser.parse_args()
+    train(h5_path=args.data)

@@ -69,7 +69,7 @@ class VizdoomDataset(Dataset):
         return frames
 
 
-def train(resume=None):
+def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5'):
     # Shared
     batch_size = 32
     num_epochs = 10
@@ -111,7 +111,7 @@ def train(resume=None):
 
     # Dataset and dataloader
     dataset = VizdoomDataset(
-        h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
+        h5_path=h5_path,
         sequence_length=sequence_length
     )
     sampler = DistributedSampler(dataset) if ddp else None
@@ -294,7 +294,8 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
+    parser.add_argument('--data', type=str, default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
     args = parser.parse_args()
-    train(resume=args.resume)
+    train(resume=args.resume, h5_path=args.data)
     if dist.is_initialized():
         dist.destroy_process_group()
