@@ -60,9 +60,8 @@ class VizdoomDataset(Dataset):
         return frames, game_actions
 
 
-def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5', num_actions=4):
+def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5', num_actions=4, num_epochs=10):
     batch_size = 32
-    num_epochs = 10
     learning_rate = 1e-4
     sequence_length = 16
     img_size = (64, 64)
@@ -197,7 +196,8 @@ if __name__ == '__main__':
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--data', type=str, default='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5')
     parser.add_argument('--num-actions', type=int, default=4, help='Number of game actions (4 for HealthGathering, 3 for TakeCover)')
+    parser.add_argument('--epochs', type=int, default=10)
     args = parser.parse_args()
-    train(resume=args.resume, h5_path=args.data, num_actions=args.num_actions)
+    train(resume=args.resume, h5_path=args.data, num_actions=args.num_actions, num_epochs=args.epochs)
     if dist.is_initialized():
         dist.destroy_process_group()
