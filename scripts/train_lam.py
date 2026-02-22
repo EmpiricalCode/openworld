@@ -118,6 +118,8 @@ def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgatheri
     if resume:
         ckpt = torch.load(resume, map_location=device)
         (lam.module if ddp else lam).load_state_dict(ckpt['model_state_dict'])
+        if 'classifier_state_dict' in ckpt:
+            action_classifier.load_state_dict(ckpt['classifier_state_dict'])
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         start_epoch = ckpt['epoch'] + 1
         if is_main:
@@ -181,6 +183,7 @@ def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgatheri
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': lam_state,
+                'classifier_state_dict': action_classifier.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': avg_loss,
                 'recon_loss': avg_recon,
