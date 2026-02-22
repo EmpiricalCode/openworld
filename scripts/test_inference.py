@@ -122,7 +122,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
     tokenizer_num_bins = 4
     lam_embed_dim = 128
     lam_latent_dim_actions = 3
-    dynamics_embed_dim = 192
+    dynamics_embed_dim = 264
 
     num_patches_x = img_size[1] // patch_size
     num_patches_y = img_size[0] // patch_size
