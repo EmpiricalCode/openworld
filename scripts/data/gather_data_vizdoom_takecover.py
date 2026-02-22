@@ -18,7 +18,7 @@ SAVE_DIR = Path("data/vizdoom_takecover")
 
 
 def collect_data(num_episodes=500, output_file="vizdoom_takecover.h5"):
-    env = gym.make("VizdoomTakeCover-v1", render_mode="rgb_array", frame_skip=4)
+    env = gym.make("VizdoomTakeCover-v1", render_mode="rgb_array", frame_skip=8)
 
     all_frames = []
     all_actions = []
