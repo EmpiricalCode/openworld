@@ -100,10 +100,9 @@ def test_action_consistency(lam_checkpoint, h5_path='data/vizdoom_healthgatherin
             lam_tokens = fsq_actions.latent_to_index(lam_actions_continuous)  # (1, T-1)
             lam_tokens = lam_tokens[0].cpu().numpy()  # (T-1,)
 
-            # seq_actions[t] is the game action taken at step t, which caused the transition t->t+1
-            # So lam_tokens[t] should correspond to seq_actions[t] for t in 0..T-2
+            # lam_tokens[t] = transition frames[t] -> frames[t+1], which is seq_actions[t+1]
             for t in range(sequence_length - 1):
-                game_action = seq_actions[t]
+                game_action = seq_actions[t + 1]
                 lam_token = lam_tokens[t]
                 action_token_counts[game_action][lam_token] += 1
                 total_transitions += 1
