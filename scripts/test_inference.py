@@ -14,8 +14,8 @@ import cv2
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.model.video_tokenizer import VideoTokenizer
-from core.model.latent_action_model import LatentActionModel
 from core.model.dynamics_model import DynamicsModel
+from core.model.components.quantization import FSQ
 
 
 ACTION_NAMES = {0: 'noop', 1: 'left', 2: 'right'}
@@ -24,12 +24,12 @@ ACTION_NAMES = {0: 'noop', 1: 'left', 2: 'right'}
 GAME_ACTION_TO_LAM_TOKEN = {0: 3, 1: 1, 2: 2}
 
 
-def lam_token_for_action(game_action, lam, device):
+def action_index_to_latent(game_action, fsq, device):
     """
-    Returns the FSQ latent vector for a given game action using the LAM encoder's FSQ.
+    Returns the FSQ latent vector for a given game action.
+    Uses a standalone FSQ — no LAM model needed.
     """
     lam_token_idx = GAME_ACTION_TO_LAM_TOKEN[game_action]
-    fsq = lam.encoder.fsq
     num_codes = fsq.num_bins ** fsq.latent_dim
     all_indices = torch.arange(num_codes, device=device)
     all_latents = fsq.index_to_latent(all_indices.unsqueeze(0))  # (1, num_codes, latent_dim)
@@ -108,7 +108,7 @@ def save_video(frames, path, fps=10):
     print(f"  Saved {len(frames)} frames to {path}")
 
 
-def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
+def main(dynamics_checkpoint, tokenizer_checkpoint,
          h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
          num_steps=100, output_dir='outputs/inference', seed=42, volume_name=None):
 
@@ -120,7 +120,6 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
     tokenizer_embed_dim = 128
     tokenizer_latent_dim = 5
     tokenizer_num_bins = 4
-    lam_embed_dim = 128
     lam_latent_dim_actions = 3
     dynamics_embed_dim = 192
 
@@ -145,21 +144,8 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
     video_tokenizer.eval()
     print(f"Loaded VideoTokenizer from {tokenizer_checkpoint}")
 
-    # Load LAM
-    lam = LatentActionModel(
-        img_size=img_size,
-        patch_size=8,
-        in_channels=in_channels,
-        num_frames=sequence_length,
-        embed_dim=lam_embed_dim,
-        latent_dim=tokenizer_latent_dim,
-        latent_dim_actions=lam_latent_dim_actions,
-        num_bins=tokenizer_num_bins
-    ).to(device)
-    ckpt = torch.load(lam_checkpoint, map_location=device)
-    lam.load_state_dict(ckpt['model_state_dict'])
-    lam.eval()
-    print(f"Loaded LAM from {lam_checkpoint}")
+    # Standalone FSQ for action tokens (no learned params, just needs matching config)
+    action_fsq = FSQ(latent_dim=lam_latent_dim_actions, num_bins=tokenizer_num_bins).to(device)
 
     # Load DynamicsModel
     dynamics_model = DynamicsModel(
@@ -204,11 +190,11 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
     print(f"Seed latents shape: {seed_latents.shape} (15 real + 1 placeholder)")
 
     # Generate one video per action
-    for game_action in range(4):
+    for game_action in ACTION_NAMES:
         action_name = ACTION_NAMES[game_action]
         print(f"\nGenerating video for action {game_action} ({action_name})...")
 
-        action_latent = lam_token_for_action(game_action, lam, device)
+        action_latent = action_index_to_latent(game_action, action_fsq, device)
 
         video_frames = generate_video(
             dynamics_model=dynamics_model,
@@ -227,7 +213,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
         import modal
         vol = modal.Volume.from_name(volume_name, create_if_missing=True)
         with vol.batch_upload() as batch:
-            for game_action in range(4):
+            for game_action in ACTION_NAMES:
                 action_name = ACTION_NAMES[game_action]
                 local_path = os.path.join(output_dir, f'action_{game_action}_{action_name}.mp4')
                 remote_path = f'/inference/action_{game_action}_{action_name}.mp4'
@@ -243,7 +229,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dynamics', required=True, help='Path to dynamics model checkpoint')
     parser.add_argument('--tokenizer', required=True, help='Path to video tokenizer checkpoint')
-    parser.add_argument('--lam', required=True, help='Path to LAM checkpoint')
     parser.add_argument('--h5', default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
     parser.add_argument('--steps', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42)
@@ -254,7 +239,6 @@ if __name__ == '__main__':
     main(
         dynamics_checkpoint=args.dynamics,
         tokenizer_checkpoint=args.tokenizer,
-        lam_checkpoint=args.lam,
         h5_path=args.h5,
         num_steps=args.steps,
         output_dir=args.output_dir,
