@@ -44,8 +44,8 @@ def visualize_reconstruction(checkpoint_path='checkpoints/video_tokenizer_epoch_
     print(f"Checkpoint loss: {checkpoint['loss']:.6f}")
 
     # Generate a longer rollout from the environment
-    print(f"\nGenerating {rollout_length}-frame rollout from ViZDoom HealthGathering environment...")
-    env = gym.make("VizdoomHealthGathering-v1", render_mode="rgb_array")
+    print(f"\nGenerating {rollout_length}-frame rollout from ViZDoom TakeCover environment...")
+    env = gym.make("VizdoomTakeCover-v1", render_mode="rgb_array")
     observation, info = env.reset()
 
     all_frames = []
