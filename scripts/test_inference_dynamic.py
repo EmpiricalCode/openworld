@@ -37,13 +37,15 @@ def action_index_to_latent(game_action, fsq, device):
 
 
 def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latents,
-                           action_schedule, action_fsq, device):
+                           action_schedule, action_fsq, device,
+                           initial_action_window=None):
     """
     Autoregressively generate frames with a changing action schedule.
 
     Args:
         seed_latents: (1, 16, N, latent_dim)
         action_schedule: list of (game_action_id, num_frames)
+        initial_action_window: (16, latent_dim_actions) — actions for seed frames
     """
     num_frames = dynamics_model.num_frames  # 16
     N = seed_latents.shape[2]
@@ -73,6 +75,13 @@ def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latents,
 
     x_input = seed_latents.clone()
 
+    # Action window: tracks the action taken at each position (sliding with frames)
+    # Position 0 is null action, positions 1..15 are the actions that produced those frames
+    if initial_action_window is not None:
+        action_window = initial_action_window.clone()
+    else:
+        action_window = torch.zeros(num_frames, lam_latent_dim_actions, device=device)
+
     # Print schedule
     print(f"  Action schedule ({total_steps} steps):")
     cumulative = 0
@@ -82,18 +91,26 @@ def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latents,
 
     for step in range(total_steps):
         action_id = step_actions[step]
-        fixed_action = action_latents[action_id].reshape(1, -1)
+        current_action = action_latents[action_id]
 
-        actions = torch.zeros(1, num_frames, lam_latent_dim_actions, device=device)
-        actions[0, 1:] = fixed_action
+        # Place current action at the prediction slot BEFORE calling the model
+        # a_shifted[t] = action that produces frame t, so position 15 gets current_action
+        action_window[-1] = current_action
+
+        # Build action tensor from the sliding window
+        actions = action_window.unsqueeze(0).clone()  # (1, 16, lam_latent_dim_actions)
 
         lengths = torch.tensor([num_frames - 1], dtype=torch.long, device=device)
 
         with torch.no_grad():
             next_latent = dynamics_model(x_input.clone(), actions, lengths, training=False)
 
+        # Slide both frames and actions
         x_input[0, :-1] = x_input[0, 1:].clone()
         x_input[0, -1] = next_latent[0]
+
+        action_window[:-1] = action_window[1:].clone()
+        action_window[-1] = 0.0  # placeholder for next step's action
 
         with torch.no_grad():
             decoded_window = video_tokenizer.decoder(x_input)
@@ -128,7 +145,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     tokenizer_latent_dim = 5
     tokenizer_num_bins = 4
     lam_latent_dim_actions = 3
-    dynamics_embed_dim = 192
+    dynamics_embed_dim = 216
 
     num_patches_x = img_size[1] // patch_size
     num_patches_y = img_size[0] // patch_size
@@ -164,14 +181,16 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     print(f"  Epoch: {ckpt['epoch'] + 1}, Dynamics loss: {ckpt['dynamics_loss']:.6f}")
     print()
 
-    # Load seed sequence
+    # Load seed sequence + actions
     print(f"Loading seed frames from {h5_path}...")
     rng = np.random.default_rng(seed)
-    num_seed = sequence_length - 1
+    num_seed = sequence_length - 1  # 15 seed frames
     with h5py.File(h5_path, 'r') as f:
         total_frames = f['frames'].shape[0]
         start_idx = rng.integers(0, total_frames - num_seed)
         seed_frames = f['frames'][start_idx:start_idx + num_seed]
+        # actions[i] = action that produced frames[i] (the action taken before observing frame i)
+        seed_actions = f['actions'][start_idx:start_idx + num_seed]  # (15,)
 
     print(f"Seed sequence: frames {start_idx} to {start_idx + num_seed - 1}")
     seed_frames_f = seed_frames.astype(np.float32) / 255.0
@@ -185,6 +204,15 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     seed_latents = torch.zeros(1, sequence_length, N, latent_dim, device=device)
     seed_latents[:, :num_seed] = seed_latents_15
 
+    # Build initial action window from seed actions
+    # a_shifted[0] = null (always, by training convention)
+    # a_shifted[t] for t>=1 = action that produced frame t
+    # seed_actions[i] = action that produced frames[i], so seed_actions[1..14] go to positions 1..14
+    seed_action_window = torch.zeros(sequence_length, lam_latent_dim_actions, device=device)
+    for i in range(1, len(seed_actions)):
+        seed_action_window[i] = action_index_to_latent(int(seed_actions[i]), action_fsq, device)
+    # Position 0 and 15 left as zero
+
     # Generate
     print("\nGenerating dynamic action video...")
     video_frames = generate_video_dynamic(
@@ -193,7 +221,8 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
         seed_latents=seed_latents,
         action_schedule=ACTION_SCHEDULE,
         action_fsq=action_fsq,
-        device=device
+        device=device,
+        initial_action_window=seed_action_window
     )
 
     out_path = os.path.join(output_dir, 'dynamic_actions.mp4')
