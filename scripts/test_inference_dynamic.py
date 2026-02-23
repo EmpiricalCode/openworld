@@ -22,8 +22,8 @@ GAME_ACTION_TO_LAM_TOKEN = {0: 3, 1: 1, 2: 2}
 # Action schedule: (action_id, num_frames)
 ACTION_SCHEDULE = [
     (2, 50),   # right
-    (1, 15),   # left
-    (0, 20),   # noop
+    (1, 50),   # left
+    (0, 50),   # noop
     (1, 50),   # left
 ]
 
