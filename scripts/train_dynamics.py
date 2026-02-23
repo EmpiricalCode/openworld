@@ -72,7 +72,8 @@ class VizdoomDataset(Dataset):
 
 def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', tokenizer_ckpt=None, lam_ckpt=None, num_epochs=10, volume_name=None):
    
-    vol = modal.Volume.from_name(volume_name, create_if_missing=True)
+    if volume_name:
+        vol = modal.Volume.from_name(volume_name, create_if_missing=True)
    
     # Shared
     batch_size = 32
