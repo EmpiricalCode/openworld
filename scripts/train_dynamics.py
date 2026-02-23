@@ -69,7 +69,7 @@ class VizdoomDataset(Dataset):
         return frames
 
 
-def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5'):
+def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', tokenizer_ckpt=None, lam_ckpt=None):
     # Shared
     batch_size = 32
     num_epochs = 10
@@ -91,8 +91,8 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
     # DynamicsModel
     dynamics_embed_dim = 264
 
-    tokenizer_checkpoint = 'checkpoints/video_tokenizer_epoch_6.pt'
-    lam_checkpoint = 'checkpoints/lam_epoch_3.pt'
+    tokenizer_checkpoint = tokenizer_ckpt
+    lam_checkpoint = lam_ckpt
 
     # DDP setup
     ddp = 'LOCAL_RANK' in os.environ
@@ -295,7 +295,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--data', type=str, default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
+    parser.add_argument('--tokenizer', type=str, required=True, help='Path to video tokenizer checkpoint')
+    parser.add_argument('--lam', type=str, required=True, help='Path to LAM checkpoint')
     args = parser.parse_args()
-    train(resume=args.resume, h5_path=args.data)
+    train(resume=args.resume, h5_path=args.data, tokenizer_ckpt=args.tokenizer, lam_ckpt=args.lam)
     if dist.is_initialized():
         dist.destroy_process_group()
