@@ -10,6 +10,7 @@ import sys
 import os
 import time
 from torch.utils.data import Dataset, DataLoader
+import modal
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -69,7 +70,10 @@ class VizdoomDataset(Dataset):
         return frames
 
 
-def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', tokenizer_ckpt=None, lam_ckpt=None, num_epochs=10):
+def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', tokenizer_ckpt=None, lam_ckpt=None, num_epochs=10, volume_name=None):
+   
+    vol = modal.Volume.from_name(volume_name, create_if_missing=True)
+   
     # Shared
     batch_size = 32
     learning_rate = 1e-4
@@ -88,7 +92,7 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
     lam_latent_dim_actions = 3  # FSQ latent dim for action tokens
 
     # DynamicsModel
-    dynamics_embed_dim = 264
+    dynamics_embed_dim = 216
 
     tokenizer_checkpoint = tokenizer_ckpt
     lam_checkpoint = lam_ckpt
@@ -286,6 +290,9 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
                 'dynamics_loss': avg_dynamics_loss,
             }, f'checkpoints/dynamics_epoch_{epoch+1}.pt')
             print(f"Checkpoint saved: dynamics_epoch_{epoch+1}.pt")
+            if volume_name:
+                vol.put_file(f'checkpoints/dynamics_epoch_{epoch+1}.pt', f'/dynamics_epoch_{epoch+1}.pt')
+                print(f"Uploaded to volume: {volume_name}")
             print()
 
 
@@ -297,7 +304,8 @@ if __name__ == '__main__':
     parser.add_argument('--tokenizer', type=str, required=True, help='Path to video tokenizer checkpoint')
     parser.add_argument('--lam', type=str, required=True, help='Path to LAM checkpoint')
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
+    parser.add_argument('--volume', type=str, default=None, help='Modal volume name to upload checkpoints to')
     args = parser.parse_args()
-    train(resume=args.resume, h5_path=args.data, tokenizer_ckpt=args.tokenizer, lam_ckpt=args.lam, num_epochs=args.epochs)
+    train(resume=args.resume, h5_path=args.data, tokenizer_ckpt=args.tokenizer, lam_ckpt=args.lam, num_epochs=args.epochs, volume_name=args.volume)
     if dist.is_initialized():
         dist.destroy_process_group()
