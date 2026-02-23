@@ -58,12 +58,12 @@ def generate_video(dynamics_model, video_tokenizer, seed_latents, action_latent,
     lam_latent_dim_actions = action_latent.shape[0]
     fixed_action = action_latent.reshape(1, -1).to(device)  # (1, L)
 
-    # Decode seed frames (first 15) into the output video
+    # Decode seed frames (first 15) using full context window
     frames = []
     with torch.no_grad():
+        decoded = video_tokenizer.decoder(seed_latents)  # (1, 16, C, H, W)
         for t in range(num_frames - 1):
-            px = video_tokenizer.decoder(seed_latents[:, t:t+1])  # (1, 1, C, H, W)
-            frame = px[0, 0].permute(1, 2, 0).cpu().numpy()
+            frame = decoded[0, t].permute(1, 2, 0).cpu().numpy()
             frame = (frame.clip(0, 1) * 255).astype(np.uint8)
             frames.append(frame)
 
@@ -82,19 +82,19 @@ def generate_video(dynamics_model, video_tokenizer, seed_latents, action_latent,
         with torch.no_grad():
             next_latent = dynamics_model(x_input.clone(), actions, lengths, training=False)  # (1, N, latent_dim)
 
-        # Decode to pixel frame
+        # Slide window: drop oldest frame, append generated frame
+        x_input[0, :-1] = x_input[0, 1:].clone()
+        x_input[0, -1] = next_latent[0]
+
+        # Decode full 16-frame context window, take last frame
         with torch.no_grad():
-            next_pixel = video_tokenizer.decoder(next_latent.unsqueeze(1))  # (1, 1, C, H, W)
-        frame = next_pixel[0, 0].permute(1, 2, 0).cpu().numpy()
+            decoded_window = video_tokenizer.decoder(x_input)  # (1, 16, C, H, W)
+        frame = decoded_window[0, -1].permute(1, 2, 0).cpu().numpy()
         frame = (frame.clip(0, 1) * 255).astype(np.uint8)
         frames.append(frame)
 
         if (step + 1) % 50 == 0:
             print(f"    Step {step + 1}/{num_steps}")
-
-        # Slide window: drop oldest frame, append generated frame
-        x_input[0, :-1] = x_input[0, 1:].clone()
-        x_input[0, -1] = next_latent[0]
 
     return frames
 
