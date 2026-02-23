@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 import os
+import argparse
 import gymnasium as gym
 import vizdoom.gymnasium_wrapper  # Register ViZDoom environments
 import cv2
@@ -11,8 +12,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.model.video_tokenizer import VideoTokenizer
 
-def visualize_reconstruction(checkpoint_path='checkpoints/video_tokenizer_epoch_10.pt',
-                            sequence_length=8,
+def visualize_reconstruction(checkpoint_path='checkpoints/video_tokenizer_epoch_6.pt',
+                            sequence_length=16,
                             rollout_length=100):
     """
     Generate a longer rollout from the environment, sample random frames from it, reconstruct them, and display original vs reconstructed frames.
@@ -28,8 +29,8 @@ def visualize_reconstruction(checkpoint_path='checkpoints/video_tokenizer_epoch_
     # Load model
     print("Loading model...")
     model = VideoTokenizer(
-        img_size=(128, 128),
-        patch_size=8,
+        img_size=(64, 64),
+        patch_size=4,
         in_channels=3,
         num_frames=sequence_length,
         embed_dim=128
@@ -55,7 +56,7 @@ def visualize_reconstruction(checkpoint_path='checkpoints/video_tokenizer_epoch_
 
         # Get frame and resize to 128x128
         frame = env.render()
-        frame_resized = cv2.resize(frame, (128, 128), interpolation=cv2.INTER_AREA)
+        frame_resized = cv2.resize(frame, (64, 64), interpolation=cv2.INTER_AREA)
         all_frames.append(frame_resized)
 
         # Reset if episode ends
@@ -115,4 +116,8 @@ def visualize_reconstruction(checkpoint_path='checkpoints/video_tokenizer_epoch_
     print(f"\nMSE: {mse:.6f}")
 
 if __name__ == '__main__':
-    visualize_reconstruction()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--checkpoint', type=str, default='checkpoints/video_tokenizer_epoch_6.pt',
+                        help='Path to video tokenizer checkpoint')
+    args = parser.parse_args()
+    visualize_reconstruction(checkpoint_path=args.checkpoint)
