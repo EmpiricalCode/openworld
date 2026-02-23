@@ -69,10 +69,9 @@ class VizdoomDataset(Dataset):
         return frames
 
 
-def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', tokenizer_ckpt=None, lam_ckpt=None):
+def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', tokenizer_ckpt=None, lam_ckpt=None, num_epochs=10):
     # Shared
     batch_size = 32
-    num_epochs = 10
     learning_rate = 1e-4
     sequence_length = 16
     img_size = (64, 64)
@@ -297,7 +296,8 @@ if __name__ == '__main__':
     parser.add_argument('--data', type=str, default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
     parser.add_argument('--tokenizer', type=str, required=True, help='Path to video tokenizer checkpoint')
     parser.add_argument('--lam', type=str, required=True, help='Path to LAM checkpoint')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     args = parser.parse_args()
-    train(resume=args.resume, h5_path=args.data, tokenizer_ckpt=args.tokenizer, lam_ckpt=args.lam)
+    train(resume=args.resume, h5_path=args.data, tokenizer_ckpt=args.tokenizer, lam_ckpt=args.lam, num_epochs=args.epochs)
     if dist.is_initialized():
         dist.destroy_process_group()
