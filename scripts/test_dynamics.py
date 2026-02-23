@@ -41,7 +41,7 @@ def test(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
     tokenizer_num_bins = 4
     lam_embed_dim = 128
     lam_latent_dim_actions = 3
-    dynamics_embed_dim = 264
+    dynamics_embed_dim = 192
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -160,17 +160,20 @@ def test(dynamics_checkpoint, tokenizer_checkpoint, lam_checkpoint,
 
             print(f"  Generated frame {gen_idx}/{T-1}")
 
-        # Decode all predicted latents to pixels
+        # Decode all predicted latents with full 16-frame context
         predicted_pixels = []
-        for pred_lat in predicted_latents:
-            px = video_tokenizer.decoder(pred_lat.unsqueeze(1))  # (1, 1, C, H, W)
-            predicted_pixels.append(px[0, 0].permute(1, 2, 0).cpu().numpy())
+        for i, pred_lat in enumerate(predicted_latents):
+            gen_idx = i + 1  # predicted_latents[0] = frame 1, etc.
+            # Build context: GT frames before gen_idx, predicted frame at gen_idx, zeros after
+            ctx = latents_gt.clone()
+            ctx[0, gen_idx] = pred_lat[0]
+            ctx[0, gen_idx+1:] = 0.0
+            px = video_tokenizer.decoder(ctx)  # (1, T, C, H, W)
+            predicted_pixels.append(px[0, gen_idx].permute(1, 2, 0).cpu().numpy())
 
-        # Decode ground truth frames 0..T-1 for comparison
-        gt_pixels = []
-        for t in range(T):
-            px = video_tokenizer.decoder(latents_gt[:, t:t+1])  # (1, 1, C, H, W)
-            gt_pixels.append(px[0, 0].permute(1, 2, 0).cpu().numpy())
+        # Decode ground truth frames with full 16-frame context
+        gt_decoded = video_tokenizer.decoder(latents_gt)  # (1, T, C, H, W)
+        gt_pixels = [gt_decoded[0, t].permute(1, 2, 0).cpu().numpy() for t in range(T)]
 
     # Build comparison grid: row 0 = ground truth, row 1 = predictions
     num_cols = T
