@@ -18,10 +18,10 @@ from core.model.latent_action_model import LatentActionModel
 from core.model.dynamics_model import DynamicsModel
 
 
-ACTION_NAMES = {0: 'noop', 1: 'forward', 2: 'right', 3: 'left'}
+ACTION_NAMES = {0: 'noop', 1: 'left', 2: 'right'}
 
-# Empirical mapping from game action index to LAM token index
-GAME_ACTION_TO_LAM_TOKEN = {0: 6, 1: 5, 2: 0, 3: 3}
+# Empirical mapping from game action index to LAM token index (TakeCover)
+GAME_ACTION_TO_LAM_TOKEN = {0: 3, 1: 1, 2: 2}
 
 
 def lam_token_for_action(game_action, lam, device):
