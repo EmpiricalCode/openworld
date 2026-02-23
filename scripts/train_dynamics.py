@@ -292,7 +292,8 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
             }, f'checkpoints/dynamics_epoch_{epoch+1}.pt')
             print(f"Checkpoint saved: dynamics_epoch_{epoch+1}.pt")
             if volume_name:
-                vol.put_file(f'checkpoints/dynamics_epoch_{epoch+1}.pt', f'/dynamics_epoch_{epoch+1}.pt')
+                with vol.batch_upload(force=True) as batch:
+                    batch.put_file(f'checkpoints/dynamics_epoch_{epoch+1}.pt', f'dynamics_epoch_{epoch+1}.pt')
                 print(f"Uploaded to volume: {volume_name}")
             print()
 
