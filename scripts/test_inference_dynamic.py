@@ -153,6 +153,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     tokenizer_latent_dim = 5
     tokenizer_num_bins = 4
     lam_latent_dim_actions = 3
+    lam_latent_bins = 2
     dynamics_embed_dim = 216
 
     num_patches_x = img_size[1] // patch_size
@@ -173,7 +174,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     video_tokenizer.eval()
     print(f"Loaded VideoTokenizer from {tokenizer_checkpoint}")
 
-    action_fsq = FSQ(latent_dim=lam_latent_dim_actions, num_bins=tokenizer_num_bins).to(device)
+    action_fsq = FSQ(latent_dim=lam_latent_dim_actions, num_bins=lam_latent_bins).to(device)
 
     # Load DynamicsModel
     dynamics_model = DynamicsModel(

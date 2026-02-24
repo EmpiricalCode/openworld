@@ -121,7 +121,8 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     tokenizer_latent_dim = 5
     tokenizer_num_bins = 4
     lam_latent_dim_actions = 3
-    dynamics_embed_dim = 192
+    lam_latent_bins = 2
+    dynamics_embed_dim = 216
 
     num_patches_x = img_size[1] // patch_size
     num_patches_y = img_size[0] // patch_size
@@ -145,7 +146,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     print(f"Loaded VideoTokenizer from {tokenizer_checkpoint}")
 
     # Standalone FSQ for action tokens (no learned params, just needs matching config)
-    action_fsq = FSQ(latent_dim=lam_latent_dim_actions, num_bins=tokenizer_num_bins).to(device)
+    action_fsq = FSQ(latent_dim=lam_latent_dim_actions, num_bins=lam_latent_bins).to(device)
 
     # Load DynamicsModel
     dynamics_model = DynamicsModel(
