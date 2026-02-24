@@ -30,10 +30,8 @@ ACTION_SCHEDULE = [
 
 def action_index_to_latent(game_action, fsq, device):
     lam_token_idx = GAME_ACTION_TO_LAM_TOKEN[game_action]
-    num_codes = fsq.num_bins ** fsq.latent_dim
-    all_indices = torch.arange(num_codes, device=device)
-    all_latents = fsq.index_to_latent(all_indices.unsqueeze(0))
-    return all_latents[0, lam_token_idx]
+    idx = torch.tensor([[lam_token_idx]], device=device)
+    return fsq.index_to_latent(idx)[0, 0]
 
 
 def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latents,
