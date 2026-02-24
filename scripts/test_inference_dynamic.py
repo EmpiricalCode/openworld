@@ -34,20 +34,19 @@ def action_index_to_latent(game_action, fsq, device):
     return fsq.index_to_latent(idx)[0, 0]
 
 
-def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latents,
-                           action_schedule, action_fsq, device,
-                           initial_action_window=None):
+def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latent,
+                           action_schedule, action_fsq, device):
     """
     Autoregressively generate frames with a changing action schedule.
+    Starts from a single seed frame, grows context up to 16, then slides.
 
     Args:
-        seed_latents: (1, 16, N, latent_dim)
+        seed_latent: (1, 1, N, latent_dim) — single seed frame latent
         action_schedule: list of (game_action_id, num_frames)
-        initial_action_window: (16, latent_dim_actions) — actions for seed frames
     """
     num_frames = dynamics_model.num_frames  # 16
-    N = seed_latents.shape[2]
-    latent_dim = seed_latents.shape[-1]
+    N = seed_latent.shape[2]
+    latent_dim = seed_latent.shape[-1]
     lam_latent_dim_actions = action_fsq.latent_dim
 
     # Pre-compute action latents
@@ -62,23 +61,19 @@ def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latents,
         step_actions.extend([action_id] * count)
     total_steps = len(step_actions)
 
-    # Decode seed frames (first 15)
+    # Growing lists of context latents and actions
+    context_latents = [seed_latent[0, 0]]  # list of (N, latent_dim)
+    context_actions = [torch.zeros(lam_latent_dim_actions, device=device)]  # null for seed
+
+    # Decode seed frame
     frames = []
     with torch.no_grad():
-        decoded = video_tokenizer.decoder(seed_latents)
-        for t in range(num_frames - 1):
-            frame = decoded[0, t].permute(1, 2, 0).cpu().numpy()
-            frame = (frame.clip(0, 1) * 255).astype(np.uint8)
-            frames.append(frame)
-
-    x_input = seed_latents.clone()
-
-    # Action window: tracks the action taken at each position (sliding with frames)
-    # Position 0 is null action, positions 1..15 are the actions that produced those frames
-    if initial_action_window is not None:
-        action_window = initial_action_window.clone()
-    else:
-        action_window = torch.zeros(num_frames, lam_latent_dim_actions, device=device)
+        x_pad = torch.zeros(1, num_frames, N, latent_dim, device=device)
+        x_pad[0, 0] = context_latents[0]
+        decoded = video_tokenizer.decoder(x_pad)
+        frame = decoded[0, 0].permute(1, 2, 0).cpu().numpy()
+        frame = (frame.clip(0, 1) * 255).astype(np.uint8)
+        frames.append(frame)
 
     # Print schedule
     print(f"  Action schedule ({total_steps} steps):")
@@ -90,34 +85,48 @@ def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latents,
     for step in range(total_steps):
         action_id = step_actions[step]
         current_action = action_latents[action_id]
+        ctx_len = len(context_latents)
 
-        # Place current action at the prediction slot BEFORE calling the model
-        # a_shifted[t] = action that produces frame t, so position 15 gets current_action
-        action_window[-1] = current_action
+        # Build 16-frame input: context frames packed at the front
+        x_input = torch.zeros(1, num_frames, N, latent_dim, device=device)
+        for i, lat in enumerate(context_latents):
+            x_input[0, i] = lat
 
-        # Build action tensor from the sliding window
-        actions = action_window.unsqueeze(0).clone()  # (1, 16, lam_latent_dim_actions)
+        # Build 16-frame action tensor: context actions + current at prediction slot
+        actions = torch.zeros(1, num_frames, lam_latent_dim_actions, device=device)
+        for i, act in enumerate(context_actions):
+            actions[0, i] = act
+        actions[0, ctx_len] = current_action
 
-        lengths = torch.tensor([num_frames - 1], dtype=torch.long, device=device)
-
-        with torch.no_grad():
-            next_latent = dynamics_model(x_input.clone(), actions, lengths, training=False)
-
-        # Slide both frames and actions
-        x_input[0, :-1] = x_input[0, 1:].clone()
-        x_input[0, -1] = next_latent[0]
-
-        action_window[:-1] = action_window[1:].clone()
-        action_window[-1] = 0.0  # placeholder for next step's action
+        # Predict at index ctx_len (next frame after context)
+        lengths = torch.tensor([ctx_len], dtype=torch.long, device=device)
 
         with torch.no_grad():
-            decoded_window = video_tokenizer.decoder(x_input)
-        frame = decoded_window[0, -1].permute(1, 2, 0).cpu().numpy()
+            next_latent = dynamics_model(x_input, actions, lengths, training=False)
+
+        # Append to context
+        context_latents.append(next_latent[0])
+        context_actions.append(current_action)
+
+        # If over 16, slide
+        if len(context_latents) > num_frames:
+            context_latents = context_latents[1:]
+            context_actions = context_actions[1:]
+
+        # Decode with current context, take the last frame
+        ctx_len_now = len(context_latents)
+        x_decode = torch.zeros(1, num_frames, N, latent_dim, device=device)
+        for i, lat in enumerate(context_latents):
+            x_decode[0, i] = lat
+
+        with torch.no_grad():
+            decoded_window = video_tokenizer.decoder(x_decode)
+        frame = decoded_window[0, ctx_len_now - 1].permute(1, 2, 0).cpu().numpy()
         frame = (frame.clip(0, 1) * 255).astype(np.uint8)
         frames.append(frame)
 
         if (step + 1) % 25 == 0:
-            print(f"    Step {step + 1}/{total_steps} ({ACTION_NAMES[action_id]})")
+            print(f"    Step {step + 1}/{total_steps} ({ACTION_NAMES[action_id]}, ctx={ctx_len_now})")
 
     return frames
 
@@ -179,48 +188,32 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     print(f"  Epoch: {ckpt['epoch'] + 1}, Dynamics loss: {ckpt['dynamics_loss']:.6f}")
     print()
 
-    # Load seed sequence + actions
-    print(f"Loading seed frames from {h5_path}...")
+    # Load single seed frame
+    print(f"Loading seed frame from {h5_path}...")
     rng = np.random.default_rng(seed)
-    num_seed = sequence_length - 1  # 15 seed frames
     with h5py.File(h5_path, 'r') as f:
         total_frames = f['frames'].shape[0]
-        start_idx = rng.integers(0, total_frames - num_seed)
-        seed_frames = f['frames'][start_idx:start_idx + num_seed]
-        # actions[i] = action that produced frames[i] (the action taken before observing frame i)
-        seed_actions = f['actions'][start_idx:start_idx + num_seed]  # (15,)
+        start_idx = rng.integers(0, total_frames)
+        seed_frame = f['frames'][start_idx:start_idx + 1]  # (1, H, W, C)
 
-    print(f"Seed sequence: frames {start_idx} to {start_idx + num_seed - 1}")
-    seed_frames_f = seed_frames.astype(np.float32) / 255.0
-    seed_tensor = torch.from_numpy(seed_frames_f).permute(0, 3, 1, 2).unsqueeze(0).to(device)
+    print(f"Seed frame: index {start_idx}")
+    seed_frame_f = seed_frame.astype(np.float32) / 255.0
+    seed_tensor = torch.from_numpy(seed_frame_f).permute(0, 3, 1, 2).unsqueeze(0).to(device)  # (1, 1, C, H, W)
 
     with torch.no_grad():
-        seed_latents_15 = video_tokenizer.encoder(seed_tensor)
+        seed_latent = video_tokenizer.encoder(seed_tensor)  # (1, 1, N, latent_dim)
 
-    N = seed_latents_15.shape[2]
-    latent_dim = seed_latents_15.shape[3]
-    seed_latents = torch.zeros(1, sequence_length, N, latent_dim, device=device)
-    seed_latents[:, :num_seed] = seed_latents_15
-
-    # Build initial action window from seed actions
-    # a_shifted[0] = null (always, by training convention)
-    # a_shifted[t] for t>=1 = action that produced frame t
-    # seed_actions[i] = action that produced frames[i], so seed_actions[1..14] go to positions 1..14
-    seed_action_window = torch.zeros(sequence_length, lam_latent_dim_actions, device=device)
-    for i in range(1, len(seed_actions)):
-        seed_action_window[i] = action_index_to_latent(int(seed_actions[i]), action_fsq, device)
-    # Position 0 and 15 left as zero
+    print(f"Seed latent shape: {seed_latent.shape}")
 
     # Generate
     print("\nGenerating dynamic action video...")
     video_frames = generate_video_dynamic(
         dynamics_model=dynamics_model,
         video_tokenizer=video_tokenizer,
-        seed_latents=seed_latents,
+        seed_latent=seed_latent,
         action_schedule=ACTION_SCHEDULE,
         action_fsq=action_fsq,
         device=device,
-        initial_action_window=seed_action_window
     )
 
     out_path = os.path.join(output_dir, 'dynamic_actions.mp4')
