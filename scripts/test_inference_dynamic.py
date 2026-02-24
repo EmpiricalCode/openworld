@@ -85,6 +85,12 @@ def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latent,
     for step in range(total_steps):
         action_id = step_actions[step]
         current_action = action_latents[action_id]
+
+        # If context is full, slide first to make room
+        if len(context_latents) >= num_frames:
+            context_latents = context_latents[1:]
+            context_actions = context_actions[1:]
+
         ctx_len = len(context_latents)
 
         # Build 16-frame input: context frames packed at the front
@@ -104,14 +110,9 @@ def generate_video_dynamic(dynamics_model, video_tokenizer, seed_latent,
         with torch.no_grad():
             next_latent = dynamics_model(x_input, actions, lengths, training=False)
 
-        # Append to context
+        # Append generated frame to context
         context_latents.append(next_latent[0])
         context_actions.append(current_action)
-
-        # If over 16, slide
-        if len(context_latents) > num_frames:
-            context_latents = context_latents[1:]
-            context_actions = context_actions[1:]
 
         # Decode with current context, take the last frame
         ctx_len_now = len(context_latents)
