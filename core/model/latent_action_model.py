@@ -5,7 +5,7 @@ from torch.nn import Linear
 from core.model.components.patch_embedding import PatchEmbedding
 from core.model.components.positional_encoding import SpatioTemporalEncoding
 from core.model.components.quantization import FSQ
-from core.model.spatial_temporal_transformer import STTransformer
+from core.model.spatial_temporal_transformer import STTransformer, STTransformerAdaLN
 
 
 class LatentActionEncoder(nn.Module):
@@ -105,13 +105,14 @@ class LatentActionDecoder(nn.Module):
             num_frames=num_frames,
             embed_dim=embed_dim
         )
-        self.st_transformer_2 = STTransformer(
+        self.st_transformer_2 = STTransformerAdaLN(
             embed_dim=embed_dim,
             num_heads=4,
             num_blocks=4,
             num_patches_x=img_size[1] // patch_size,
             num_patches_y=img_size[0] // patch_size,
-            num_frames=num_frames
+            num_frames=num_frames,
+            cond_dim=latent_dim_actions
         )
 
         self.num_patches_x = img_size[1] // patch_size
@@ -125,7 +126,6 @@ class LatentActionDecoder(nn.Module):
         self.latent_head = Linear(embed_dim, latent_dim)
         self.fsq = FSQ(latent_dim=latent_dim, num_bins=num_bins)
         self.embed_head_frames = Linear(latent_dim, embed_dim)
-        self.embed_head_actions = Linear(latent_dim_actions, embed_dim)
         self.unembedding_head = Linear(embed_dim, patch_size * patch_size * in_channels)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, 1, embed_dim))
 
@@ -173,12 +173,11 @@ class LatentActionDecoder(nn.Module):
 
         # Project back to embedding space
         x = self.embed_head_frames(x)  # (B, T, N, P)
-        # Add action tokens for conditioning
-        x = x + self.embed_head_actions(actions).unsqueeze(2) # (B, T, N, P)
 
-        # PE + ST-Transformer
+        # PE + ST-Transformer with AdaLN conditioning
+        # Actions passed directly — AdaLN.proj handles the projection
         x = self.positional_encoding(x)  # (B, T, N, P)
-        x = self.st_transformer_2(x)  # (B, T, N, P)
+        x = self.st_transformer_2(x, actions)  # (B, T, N, P)
 
         # Project back to image space
         x = x.reshape(B, T, self.num_patches_y, self.num_patches_x, self.embed_dim) # (B, T, H//p, W//p, P)
