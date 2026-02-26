@@ -9,6 +9,7 @@ import sys
 import os
 import time
 from torch.utils.data import Dataset, DataLoader
+import modal
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -74,7 +75,10 @@ class VizdoomDataset(Dataset):
         return frames, game_actions, mask
 
 
-def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5', num_actions=4, num_epochs=10, sup_weight=1.0, label_fraction=1.0, seed=None):
+def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5', num_actions=4, num_epochs=10, sup_weight=1.0, label_fraction=1.0, seed=None, volume_name=None):
+    if volume_name:
+        vol = modal.Volume.from_name(volume_name, create_if_missing=True)
+
     # Set seed for reproducible weight initialization
     if seed is None:
         seed = torch.randint(0, 2**32, (1,)).item()
@@ -218,6 +222,10 @@ def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgatheri
                 'supervised_loss': avg_sup,
             }, f'checkpoints/lam_epoch_{epoch+1}.pt')
             print(f"Checkpoint saved: lam_epoch_{epoch+1}.pt")
+            if volume_name:
+                with vol.batch_upload(force=True) as batch:
+                    batch.put_file(f'checkpoints/lam_epoch_{epoch+1}.pt', f'lam_epoch_{epoch+1}.pt')
+                print(f"Uploaded to volume: {volume_name}")
             print()
 
 
@@ -231,7 +239,8 @@ if __name__ == '__main__':
     parser.add_argument('--sup-weight', type=float, default=1.0)
     parser.add_argument('--label-fraction', type=float, default=0.1, help='Fraction of frames with labelled actions (0.0-1.0)')
     parser.add_argument('--seed', type=int, default=None, help='Random seed (auto-generated if not set)')
+    parser.add_argument('--volume', type=str, default=None, help='Modal volume name to upload checkpoints to')
     args = parser.parse_args()
-    train(resume=args.resume, h5_path=args.data, num_actions=args.num_actions, num_epochs=args.epochs, sup_weight=args.sup_weight, label_fraction=args.label_fraction, seed=args.seed)
+    train(resume=args.resume, h5_path=args.data, num_actions=args.num_actions, num_epochs=args.epochs, sup_weight=args.sup_weight, label_fraction=args.label_fraction, seed=args.seed, volume_name=args.volume)
     if dist.is_initialized():
         dist.destroy_process_group()
