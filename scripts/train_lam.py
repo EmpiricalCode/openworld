@@ -16,7 +16,7 @@ from core.model.latent_action_model import LatentActionModel
 
 
 class VizdoomDataset(Dataset):
-    def __init__(self, h5_path, sequence_length=16):
+    def __init__(self, h5_path, sequence_length=16, label_fraction=0.1):
         self.sequence_length = sequence_length
 
         print(f"Loading dataset from {h5_path}...")
@@ -38,13 +38,26 @@ class VizdoomDataset(Dataset):
                 for i in range(start, end - sequence_length + 2):
                     self.valid_indices.append(i)
 
-        self.num_labeled = len(self.valid_indices)
+        # Per-frame label mask: True means this frame has a labelled action
+        # Stratified by action class so each action is equally represented
+        self.label_mask = np.zeros(self.total_frames, dtype=bool)
+        unique_actions = np.unique(self.actions)
+        num_per_action = max(1, int(label_fraction * self.total_frames / len(unique_actions)))
+        for a in unique_actions:
+            indices = np.where(self.actions == a)[0]
+            n_select = min(num_per_action, len(indices))
+            selected = np.random.choice(indices, size=n_select, replace=False)
+            self.label_mask[selected] = True
+        num_labeled = self.label_mask.sum()
 
         print(f"Dataset loaded: {self.total_frames} total frames")
         print(f"Frame shape: {self.frames.shape[1:]}")
         print(f"Number of episodes: {len(episode_starts)}")
         print(f"Creating sequences of length {sequence_length}")
         print(f"Total valid sequences: {len(self.valid_indices)}")
+        print(f"Label fraction: {label_fraction:.1%} ({num_labeled}/{self.total_frames} frames labelled)")
+        per_action_counts = {int(a): int(self.label_mask[self.actions == a].sum()) for a in unique_actions}
+        print(f"Labels per action: {per_action_counts}")
         print(f"Memory usage: {self.frames.nbytes / (1024**2):.2f} MB")
         print()
 
@@ -57,10 +70,19 @@ class VizdoomDataset(Dataset):
         frames = frames.astype(np.float32) / 255.0
         frames = torch.from_numpy(frames).permute(0, 3, 1, 2)  # (T, C, H, W)
         game_actions = torch.from_numpy(self.actions[start_idx:start_idx + self.sequence_length].astype(np.int64))  # (T,)
-        return frames, game_actions
+        mask = torch.from_numpy(self.label_mask[start_idx:start_idx + self.sequence_length])  # (T,)
+        return frames, game_actions, mask
 
 
-def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5', num_actions=4, num_epochs=10, sup_weight=1.0):
+def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5', num_actions=4, num_epochs=10, sup_weight=1.0, label_fraction=1.0, seed=None):
+    # Set seed for reproducible weight initialization
+    if seed is None:
+        seed = torch.randint(0, 2**32, (1,)).item()
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    print(f"Seed: {seed}")
+
     batch_size = 32
     learning_rate = 1e-4
     sequence_length = 16
@@ -90,7 +112,8 @@ def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgatheri
 
     dataset = VizdoomDataset(
         h5_path=h5_path,
-        sequence_length=sequence_length
+        sequence_length=sequence_length,
+        label_fraction=label_fraction
     )
     sampler = DistributedSampler(dataset) if ddp else None
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, num_workers=0)
@@ -141,20 +164,25 @@ def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgatheri
         if ddp:
             sampler.set_epoch(epoch)
 
-        for batch_idx, (videos, game_actions) in enumerate(dataloader):
+        for batch_idx, (videos, game_actions, mask) in enumerate(dataloader):
             batch_start_time = time.time()
             B = videos.shape[0]
             videos = videos.to(device)
             game_actions = game_actions.to(device)
+            mask = mask[:, 1:].to(device)  # (B, T-1) — align with actions
 
             # LAM forward
             reconstructed, actions = lam(videos)  # (B, T-1, C, H, W), (B, T-1, latent_dim_actions)
             recon_loss = F.mse_loss(reconstructed, videos[:, 1:])
 
-            # Supervised loss on all samples
+            # Supervised loss on labelled samples only
             logits = action_classifier(actions)          # (B, T-1, num_actions)
             labels = game_actions[:, 1:]                 # (B, T-1)
-            supervised_loss = F.cross_entropy(logits.reshape(-1, num_actions), labels.reshape(-1))
+            flat_mask = mask.reshape(-1)
+            if flat_mask.any():
+                supervised_loss = F.cross_entropy(logits.reshape(-1, num_actions)[flat_mask], labels.reshape(-1)[flat_mask])
+            else:
+                supervised_loss = torch.tensor(0.0, device=device)
 
             loss = recon_loss + sup_weight * supervised_loss
 
@@ -198,10 +226,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--data', type=str, default='/datasets/health-gathering/vizdoom_healthgathering_dqn.h5')
-    parser.add_argument('--num-actions', type=int, default=4, help='Number of game actions (4 for HealthGathering, 3 for TakeCover)')
+    parser.add_argument('--num-actions', type=int, default=3, help='Number of game actions (4 for HealthGathering, 3 for TakeCover)')
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--sup-weight', type=float, default=1.0)
+    parser.add_argument('--label-fraction', type=float, default=0.1, help='Fraction of frames with labelled actions (0.0-1.0)')
+    parser.add_argument('--seed', type=int, default=None, help='Random seed (auto-generated if not set)')
     args = parser.parse_args()
-    train(resume=args.resume, h5_path=args.data, num_actions=args.num_actions, num_epochs=args.epochs, sup_weight=args.sup_weight)
+    train(resume=args.resume, h5_path=args.data, num_actions=args.num_actions, num_epochs=args.epochs, sup_weight=args.sup_weight, label_fraction=args.label_fraction, seed=args.seed)
     if dist.is_initialized():
         dist.destroy_process_group()
