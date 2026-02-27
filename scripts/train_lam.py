@@ -87,15 +87,15 @@ def train(resume=None, h5_path='/datasets/health-gathering/vizdoom_healthgatheri
     np.random.seed(seed)
     print(f"Seed: {seed}")
 
-    batch_size = 32
-    learning_rate = 1e-4
+    batch_size = 64
+    learning_rate = 1.4e-4
     sequence_length = 16
     img_size = (64, 64)
     patch_size = 8
     in_channels = 3
 
-    lam_embed_dim = 128
-    lam_latent_dim_actions = 3
+    lam_embed_dim = 192
+    lam_latent_dim_actions = 4
     tokenizer_latent_dim = 5
     tokenizer_num_bins = 4
 
