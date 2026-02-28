@@ -9,6 +9,7 @@ import sys
 import os
 import time
 from torch.utils.data import Dataset, DataLoader
+import modal
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -78,7 +79,10 @@ class VizdoomDataset(Dataset):
 
         return frames
 
-def train(h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', resume=None):
+def train(h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', resume=None, volume_name=None):
+    if volume_name:
+        vol = modal.Volume.from_name(volume_name, create_if_missing=True)
+
     # Hyperparameters
     batch_size = 64
     num_epochs = 10
@@ -183,6 +187,10 @@ def train(h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
                 'loss': avg_loss,
             }, f'checkpoints/video_tokenizer_epoch_{epoch+1}.pt')
             print(f"Checkpoint saved: checkpoints/video_tokenizer_epoch_{epoch+1}.pt")
+            if volume_name:
+                with vol.batch_upload(force=True) as batch:
+                    batch.put_file(f'checkpoints/video_tokenizer_epoch_{epoch+1}.pt', f'video_tokenizer_epoch_{epoch+1}.pt')
+                print(f"Uploaded to volume: {volume_name}")
             print()
 
 if __name__ == '__main__':
@@ -190,7 +198,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
+    parser.add_argument('--volume', type=str, default=None, help='Modal volume name to upload checkpoints to')
     args = parser.parse_args()
-    train(h5_path=args.data, resume=args.resume)
+    train(h5_path=args.data, resume=args.resume, volume_name=args.volume)
     if dist.is_initialized():
         dist.destroy_process_group()
