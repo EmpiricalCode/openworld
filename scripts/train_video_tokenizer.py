@@ -80,9 +80,9 @@ class VizdoomDataset(Dataset):
 
 def train(h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', resume=None):
     # Hyperparameters
-    batch_size = 32
+    batch_size = 64
     num_epochs = 10
-    learning_rate = 1e-4
+    learning_rate = 1.4e-4
     sequence_length = 16
 
     # DDP setup
