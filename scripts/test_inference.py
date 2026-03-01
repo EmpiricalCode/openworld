@@ -18,10 +18,10 @@ from core.model.dynamics_model import DynamicsModel
 from core.model.components.quantization import FSQ
 
 
-ACTION_NAMES = {0: 'noop', 1: 'left', 2: 'right'}
+ACTION_NAMES = {0: '0', 1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6'}
 
-# Empirical mapping from game action index to LAM token index (TakeCover)
-GAME_ACTION_TO_LAM_TOKEN = {0: 3, 1: 1, 2: 2}
+# Empirical mapping from game action index to LAM token index (Deathmatch)
+GAME_ACTION_TO_LAM_TOKEN = {0: 11, 1: 0, 2: 7, 3: 2, 4: 12, 5: 15, 6: 9}
 
 
 def action_index_to_latent(game_action, fsq, device):
@@ -120,7 +120,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     tokenizer_embed_dim = 128
     tokenizer_latent_dim = 5
     tokenizer_num_bins = 4
-    lam_latent_dim_actions = 3
+    lam_latent_dim_actions = 4
     lam_latent_bins = 2
     dynamics_embed_dim = 216
 
