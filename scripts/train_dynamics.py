@@ -11,6 +11,7 @@ import os
 import time
 from torch.utils.data import Dataset, DataLoader
 import modal
+import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -74,26 +75,24 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
    
     if volume_name:
         vol = modal.Volume.from_name(volume_name, create_if_missing=True)
-   
-    # Shared
-    batch_size = 32
-    learning_rate = 1e-4
-    sequence_length = 16
-    img_size = (64, 64)
-    patch_size = 4
-    in_channels = 3
 
-    # VideoTokenizer (frozen) — must match checkpoint
-    tokenizer_embed_dim = 128
-    tokenizer_latent_dim = 5   # FSQ latent dim for frame tokens
-    tokenizer_num_bins = 4     # FSQ bins for frame tokens → 4^5 = 1024 codes
+    # Load config
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'core', 'config', 'dynamics.json')
+    with open(config_path) as f:
+        cfg = json.load(f)
 
-    # LatentActionModel (frozen) — must match checkpoint
-    lam_embed_dim = 128
-    lam_latent_dim_actions = 3  # FSQ latent dim for action tokens
-
-    # DynamicsModel
-    dynamics_embed_dim = 216
+    batch_size = cfg['batch_size']
+    learning_rate = cfg['learning_rate']
+    sequence_length = cfg['sequence_length']
+    img_size = tuple(cfg['img_size'])
+    patch_size = cfg['patch_size']
+    in_channels = cfg['in_channels']
+    tokenizer_embed_dim = cfg['tokenizer_embed_dim']
+    tokenizer_latent_dim = cfg['tokenizer_latent_dim']
+    tokenizer_num_bins = cfg['tokenizer_num_bins']
+    lam_embed_dim = cfg['lam_embed_dim']
+    lam_latent_dim_actions = cfg['lam_latent_dim_actions']
+    dynamics_embed_dim = cfg['dynamics_embed_dim']
 
     tokenizer_checkpoint = tokenizer_ckpt
     lam_checkpoint = lam_ckpt

@@ -1,0 +1,17 @@
+{
+    "batch_size": 32,
+    "learning_rate": 1e-4,
+    "sequence_length": 16,
+    "img_size": [64, 64],
+    "patch_size": 4,
+    "in_channels": 3,
+
+    "tokenizer_embed_dim": 128,
+    "tokenizer_latent_dim": 5,
+    "tokenizer_num_bins": 4,
+
+    "lam_embed_dim": 192,
+    "lam_latent_dim_actions": 4,
+
+    "dynamics_embed_dim": 216
+}
