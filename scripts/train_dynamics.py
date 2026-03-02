@@ -1,4 +1,3 @@
-import math
 import torch
 import torch.nn.functional as F
 import torch.distributed as dist
@@ -193,15 +192,20 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
         {'params': no_decay_params, 'weight_decay': 0.0},
     ], lr=learning_rate)
 
-    # Warmup + cosine LR schedule
+    # Warmup-Stable-Decay (WSD) schedule with 20% cooldown
     warmup_steps = 500
     total_steps = num_epochs * len(dataloader)
+    cooldown_steps = int(0.2 * total_steps)
+    stable_steps = total_steps - warmup_steps - cooldown_steps
+    min_lr_ratio = 0.1
     def lr_lambda(step):
         if step < warmup_steps:
             return step / warmup_steps
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        min_lr_ratio = 0.1  # floor at 10% of peak LR
-        return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+        elif step < warmup_steps + stable_steps:
+            return 1.0
+        else:
+            progress = (step - warmup_steps - stable_steps) / max(1, cooldown_steps)
+            return max(min_lr_ratio, 1.0 - (1.0 - min_lr_ratio) * progress)
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(dynamics_optimizer, lr_lambda)
 
