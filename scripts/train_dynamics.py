@@ -217,11 +217,13 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
         ckpt = torch.load(resume, map_location=device)
         (dynamics_model.module if ddp else dynamics_model).load_state_dict(ckpt['model_state_dict'])
         dynamics_optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        if 'scheduler_state_dict' in ckpt:
-            scheduler.load_state_dict(ckpt['scheduler_state_dict'])
         start_epoch = ckpt['epoch'] + 1
+        # Fast-forward scheduler to match resumed epoch (fresh schedule, no stale state)
+        steps_to_skip = start_epoch * len(dataloader)
+        for _ in range(steps_to_skip):
+            scheduler.step()
         if is_main:
-            print(f"Resumed from {resume} (epoch {ckpt['epoch']+1})")
+            print(f"Resumed from {resume} (epoch {ckpt['epoch']+1}), scheduler fast-forwarded {steps_to_skip} steps")
 
     if is_main:
         print(f"DynamicsModel parameters: {sum(p.numel() for p in dynamics_model.parameters()):,}")
@@ -281,7 +283,8 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
         avg_dynamics_loss = total_dynamics_loss / len(dataloader)
 
         if is_main:
-            print(f"Epoch [{epoch+1}/{num_epochs}] Avg Dynamics Loss: {avg_dynamics_loss:.6f}")
+            current_lr = scheduler.get_last_lr()[0]
+            print(f"Epoch [{epoch+1}/{num_epochs}] Avg Dynamics Loss: {avg_dynamics_loss:.6f}, LR: {current_lr:.6e} ({current_lr/learning_rate:.2%} of peak)")
             print()
 
             dynamics_state = dynamics_model.module.state_dict() if ddp else dynamics_model.state_dict()
