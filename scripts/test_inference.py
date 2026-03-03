@@ -36,8 +36,8 @@ def action_index_to_latent(game_action, fsq, device):
     return all_latents[0, lam_token_idx]  # (latent_dim_actions,)
 
 
-def generate_video(dynamics_model, video_tokenizer, seed_latents, action_latent,
-                   num_steps, device):
+def generate_video(dynamics_model, video_tokenizer, seed_latents, seed_actions,
+                   action_latent, num_steps, device):
     """
     Autoregressively generate num_steps frames given seed latents and a fixed action.
 
@@ -47,7 +47,9 @@ def generate_video(dynamics_model, video_tokenizer, seed_latents, action_latent,
 
     Args:
         seed_latents: (1, T_seed, N, latent_dim) — full window of context frames
-        action_latent: (latent_dim_actions,) — fixed action to repeat
+        seed_actions: (1, T_seed, latent_dim_actions) — actions for seed window
+                      position 0 is null, position t is the action that caused frame t
+        action_latent: (latent_dim_actions,) — fixed action to repeat for generation
 
     Returns:
         frames: list of (H, W, C) uint8 numpy arrays
@@ -55,8 +57,10 @@ def generate_video(dynamics_model, video_tokenizer, seed_latents, action_latent,
     num_frames = dynamics_model.num_frames  # 16
     N = seed_latents.shape[2]
     latent_dim = seed_latents.shape[-1]
-    lam_latent_dim_actions = action_latent.shape[0]
     fixed_action = action_latent.reshape(1, -1).to(device)  # (1, L)
+
+    # Track the action window — starts with real seed actions
+    action_window = seed_actions.clone()  # (1, 16, latent_dim_actions)
 
     # Decode seed frames (first 15) using full context window
     frames = []
@@ -71,20 +75,21 @@ def generate_video(dynamics_model, video_tokenizer, seed_latents, action_latent,
     x_input = seed_latents.clone()  # (1, 16, N, latent_dim)
 
     for step in range(num_steps):
-        # Actions: null at position 0, fixed_action at all other positions
-        actions = torch.zeros(1, num_frames, lam_latent_dim_actions, device=device)
-        actions[0, 1:] = fixed_action
-
         # Generate next frame at position num_frames-1 (last slot)
         # Use lengths = num_frames - 1 so the model generates at that index
         lengths = torch.tensor([num_frames - 1], dtype=torch.long, device=device)
 
         with torch.no_grad():
-            next_latent = dynamics_model(x_input.clone(), actions, lengths, training=False)  # (1, N, latent_dim)
+            next_latent = dynamics_model(x_input.clone(), action_window, lengths, training=False)  # (1, N, latent_dim)
 
         # Slide window: drop oldest frame, append generated frame
         x_input[0, :-1] = x_input[0, 1:].clone()
         x_input[0, -1] = next_latent[0]
+
+        # Slide action window: shift left, new last action is the fixed generation action
+        action_window[0, :-1] = action_window[0, 1:].clone()
+        action_window[0, -1] = fixed_action
+        action_window[0, 0] = 0  # position 0 is always null (matches training)
 
         # Decode full 16-frame context window, take last frame
         with torch.no_grad():
@@ -122,7 +127,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     tokenizer_num_bins = 4
     lam_latent_dim_actions = 4
     lam_latent_bins = 2
-    dynamics_embed_dim = 216
+    dynamics_embed_dim = 264
 
     num_patches_x = img_size[1] // patch_size
     num_patches_y = img_size[0] // patch_size
@@ -174,8 +179,10 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
         total_frames = f['frames'].shape[0]
         start_idx = rng.integers(0, total_frames - num_seed)
         seed_frames = f['frames'][start_idx:start_idx + num_seed]  # (15, H, W, C) uint8
+        seed_game_actions = f['actions'][start_idx:start_idx + num_seed]  # (15,) — action that caused each frame
 
     print(f"Seed sequence: frames {start_idx} to {start_idx + num_seed - 1} ({num_seed} frames)")
+    print(f"Seed actions: {seed_game_actions.tolist()}")
     seed_frames_f = seed_frames.astype(np.float32) / 255.0
     seed_tensor = torch.from_numpy(seed_frames_f).permute(0, 3, 1, 2).unsqueeze(0).to(device)  # (1, 15, C, H, W)
 
@@ -187,6 +194,14 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     latent_dim = seed_latents_15.shape[3]
     seed_latents = torch.zeros(1, sequence_length, N, latent_dim, device=device)
     seed_latents[:, :num_seed] = seed_latents_15
+
+    # Build seed action window: position 0 = null, position t = action that caused frame t
+    # h5 actions[start_idx + t] caused frames[start_idx + t], so seed_game_actions[t] caused seed frame t
+    seed_actions = torch.zeros(1, sequence_length, lam_latent_dim_actions, device=device)
+    for t in range(1, num_seed):
+        game_act = int(seed_game_actions[t])
+        if game_act in GAME_ACTION_TO_LAM_TOKEN:
+            seed_actions[0, t] = action_index_to_latent(game_act, action_fsq, device)
 
     print(f"Seed latents shape: {seed_latents.shape} (15 real + 1 placeholder)")
 
@@ -201,6 +216,7 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
             dynamics_model=dynamics_model,
             video_tokenizer=video_tokenizer,
             seed_latents=seed_latents.clone(),
+            seed_actions=seed_actions.clone(),
             action_latent=action_latent,
             num_steps=num_steps,
             device=device
