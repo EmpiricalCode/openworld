@@ -92,6 +92,8 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
     lam_embed_dim = cfg['lam_embed_dim']
     lam_latent_dim_actions = cfg['lam_latent_dim_actions']
     dynamics_embed_dim = cfg['dynamics_embed_dim']
+    dynamics_num_blocks = cfg['num_blocks']
+    dynamics_num_heads = cfg['num_heads']
 
     tokenizer_checkpoint = tokenizer_ckpt
     lam_checkpoint = lam_ckpt
@@ -167,7 +169,9 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
         embed_dim=dynamics_embed_dim,
         latent_dim=tokenizer_latent_dim,
         latent_dim_actions=lam_latent_dim_actions,
-        num_bins=tokenizer_num_bins
+        num_bins=tokenizer_num_bins,
+        num_blocks=dynamics_num_blocks,
+        num_heads=dynamics_num_heads
     ).to(device)
 
     if ddp:

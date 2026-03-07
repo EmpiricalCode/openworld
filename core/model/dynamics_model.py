@@ -10,7 +10,7 @@ from core.model.spatial_temporal_transformer import STTransformer, STTransformer
 
 class DynamicsModel(nn.Module):
 
-    def __init__(self, num_patches_x, num_patches_y, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, latent_dim_actions=2, num_iterations=25, num_bins=4, mask_schedule='cosine'):
+    def __init__(self, num_patches_x, num_patches_y, in_channels=3, num_frames=8, embed_dim=128, latent_dim=5, latent_dim_actions=2, num_iterations=25, num_bins=4, mask_schedule='cosine', num_blocks=8, num_heads=8):
         """
         Dynamics Model - decoder-only MaskGIT transformer for video token prediction.
         Takes continuous latent tokens + action embeddings, predicts discrete token IDs.
@@ -59,8 +59,8 @@ class DynamicsModel(nn.Module):
         # Actions passed directly (no pre-embedding) — AdaLN.proj handles the projection
         self.st_transformer = STTransformerAdaLN(
             embed_dim=embed_dim,
-            num_heads=8,
-            num_blocks=8,
+            num_heads=num_heads,
+            num_blocks=num_blocks,
             num_patches_x=num_patches_x,
             num_patches_y=num_patches_y,
             num_frames=num_frames,
