@@ -21,53 +21,80 @@ from core.model.components.quantization import FSQ
 
 
 class VizdoomDataset(Dataset):
-    def __init__(self, h5_path, sequence_length=16):
+    def __init__(self, h5_path, sequence_length=16, video_tokenizer=None, lam=None, fsq=None,
+                 lam_latent_dim_actions=None, device=None):
         """
-        Dataset for loading ViZDoom video sequences.
-        Respects episode boundaries - sequences will not cross episodes.
-
-        Args:
-            h5_path: Path to the h5 file
-            sequence_length: Number of frames per sequence
+        Dataset that precomputes tokenizer latents, LAM actions, and FSQ targets
+        for every valid sliding window at init time.
         """
         self.sequence_length = sequence_length
 
         print(f"Loading dataset from {h5_path}...")
         with h5py.File(h5_path, 'r') as f:
-            self.frames = f['frames'][:]
-            self.actions = f['actions'][:]
-            self.dones = f['dones'][:]
+            frames = f['frames'][:]
+            dones = f['dones'][:]
 
-        self.total_frames = self.frames.shape[0]
+        total_frames = frames.shape[0]
 
-        episode_ends = np.where(self.dones)[0]
+        episode_ends = np.where(dones)[0]
         episode_starts = np.concatenate([[0], episode_ends[:-1] + 1]) if len(episode_ends) > 0 else [0]
-        episode_ends = np.concatenate([episode_ends, [self.total_frames - 1]])
+        episode_ends = np.concatenate([episode_ends, [total_frames - 1]])
 
-        self.valid_indices = []
+        valid_indices = []
         for start, end in zip(episode_starts, episode_ends):
             episode_length = end - start + 1
             if episode_length >= sequence_length:
                 for i in range(start, end - sequence_length + 2):
-                    self.valid_indices.append(i)
+                    valid_indices.append(i)
 
-        print(f"Dataset loaded: {self.total_frames} total frames")
-        print(f"Frame shape: {self.frames.shape[1:]}")
-        print(f"Number of episodes: {len(episode_starts)}")
-        print(f"Creating sequences of length {sequence_length}")
-        print(f"Total valid sequences: {len(self.valid_indices)}")
-        print(f"Memory usage: {self.frames.nbytes / (1024**2):.2f} MB")
+        num_sequences = len(valid_indices)
+        print(f"Dataset loaded: {total_frames} total frames, {num_sequences} valid sequences")
+
+        # Precompute all latents, actions, targets in batches (GPU can't fit all at once)
+        print(f"Precomputing latents...")
+        batch_size = 32
+        num_patches = (video_tokenizer.encoder.patch_embedding.num_patches)
+        latent_dim = fsq.latent_dim
+
+        self.all_latents = torch.zeros(num_sequences, sequence_length, num_patches, latent_dim)
+        self.all_actions = torch.zeros(num_sequences, sequence_length, lam_latent_dim_actions)
+        self.all_targets = torch.zeros(num_sequences, sequence_length, num_patches, dtype=torch.long)
+
+        use_amp = device.type == 'cuda'
+        with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=use_amp):
+            for i in range(0, num_sequences, batch_size):
+                batch_end = min(i + batch_size, num_sequences)
+                batch_indices = valid_indices[i:batch_end]
+                B = len(batch_indices)
+
+                batch_frames = np.stack([
+                    frames[idx:idx + sequence_length] for idx in batch_indices
+                ])
+                batch_frames = batch_frames.astype(np.float32) / 255.0
+                videos = torch.from_numpy(batch_frames).permute(0, 1, 4, 2, 3).to(device)
+
+                latents = video_tokenizer.encoder(videos)
+                targets = fsq.latent_to_index(latents)
+                _, actions = lam(videos)
+                null_action = torch.zeros(B, 1, lam_latent_dim_actions, device=device)
+                a_shifted = torch.cat([null_action, actions], dim=1)
+
+                self.all_latents[i:batch_end] = latents.float().cpu()
+                self.all_actions[i:batch_end] = a_shifted.float().cpu()
+                self.all_targets[i:batch_end] = targets.cpu()
+
+                if (i // batch_size) % 50 == 0:
+                    print(f"  {batch_end}/{num_sequences}")
+
+        total_mb = (self.all_latents.nbytes + self.all_actions.nbytes + self.all_targets.nbytes) / (1024**2)
+        print(f"Precomputation complete. Memory: {total_mb:.1f} MB")
         print()
 
     def __len__(self):
-        return len(self.valid_indices)
+        return self.all_latents.shape[0]
 
     def __getitem__(self, idx):
-        start_idx = self.valid_indices[idx]
-        frames = self.frames[start_idx:start_idx + self.sequence_length]  # (T, H, W, C)
-        frames = frames.astype(np.float32) / 255.0
-        frames = torch.from_numpy(frames).permute(0, 3, 1, 2)  # (T, C, H, W)
-        return frames
+        return self.all_latents[idx], self.all_actions[idx], self.all_targets[idx]
 
 
 def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', tokenizer_ckpt=None, lam_ckpt=None, num_epochs=10, volume_name=None):
@@ -95,9 +122,6 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
     dynamics_num_blocks = cfg['num_blocks']
     dynamics_num_heads = cfg['num_heads']
 
-    tokenizer_checkpoint = tokenizer_ckpt
-    lam_checkpoint = lam_ckpt
-
     # DDP setup
     ddp = 'LOCAL_RANK' in os.environ
     if ddp:
@@ -113,52 +137,45 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
     if is_main:
         print(f"Using device: {device}, DDP: {ddp}")
 
-    # Dataset and dataloader
-    dataset = VizdoomDataset(
-        h5_path=h5_path,
-        sequence_length=sequence_length
-    )
-    sampler = DistributedSampler(dataset) if ddp else None
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, num_workers=0)
-
     num_patches_x = img_size[1] // patch_size
     num_patches_y = img_size[0] // patch_size
 
-    # Frozen pre-trained video tokenizer
+    # Load frozen tokenizer + LAM for precomputation, then free them
     video_tokenizer = VideoTokenizer(
-        img_size=img_size,
-        patch_size=patch_size,
-        in_channels=in_channels,
-        num_frames=sequence_length,
-        embed_dim=tokenizer_embed_dim,
-        latent_dim=tokenizer_latent_dim
+        img_size=img_size, patch_size=patch_size, in_channels=in_channels,
+        num_frames=sequence_length, embed_dim=tokenizer_embed_dim, latent_dim=tokenizer_latent_dim
     ).to(device)
-    checkpoint = torch.load(tokenizer_checkpoint, map_location=device)
+    checkpoint = torch.load(tokenizer_ckpt, map_location=device)
     video_tokenizer.load_state_dict(checkpoint['model_state_dict'])
     for p in video_tokenizer.parameters():
         p.requires_grad = False
     video_tokenizer.eval()
-    if is_main:
-        print(f"Loaded frozen VideoTokenizer from {tokenizer_checkpoint}")
 
-    # Frozen pre-trained LAM
     lam = LatentActionModel(
-        img_size=img_size,
-        patch_size=8,
-        in_channels=in_channels,
-        num_frames=sequence_length,
-        embed_dim=lam_embed_dim,
-        latent_dim=tokenizer_latent_dim,
-        latent_dim_actions=lam_latent_dim_actions,
-        num_bins=tokenizer_num_bins
+        img_size=img_size, patch_size=8, in_channels=in_channels,
+        num_frames=sequence_length, embed_dim=lam_embed_dim, latent_dim=tokenizer_latent_dim,
+        latent_dim_actions=lam_latent_dim_actions, num_bins=tokenizer_num_bins
     ).to(device)
-    checkpoint = torch.load(lam_checkpoint, map_location=device)
+    checkpoint = torch.load(lam_ckpt, map_location=device)
     lam.load_state_dict(checkpoint['model_state_dict'])
     for p in lam.parameters():
         p.requires_grad = False
     lam.eval()
-    if is_main:
-        print(f"Loaded frozen LAM from {lam_checkpoint}")
+
+    fsq = FSQ(latent_dim=tokenizer_latent_dim, num_bins=tokenizer_num_bins).to(device)
+
+    dataset = VizdoomDataset(
+        h5_path=h5_path, sequence_length=sequence_length,
+        video_tokenizer=video_tokenizer, lam=lam, fsq=fsq,
+        lam_latent_dim_actions=lam_latent_dim_actions, device=device
+    )
+
+    # Free tokenizer/LAM from GPU — no longer needed
+    del video_tokenizer, lam, fsq, checkpoint
+    torch.cuda.empty_cache()
+
+    sampler = DistributedSampler(dataset) if ddp else None
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, num_workers=0)
 
     # Dynamics model
     dynamics_model = DynamicsModel(
@@ -176,9 +193,6 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
 
     if ddp:
         dynamics_model = DDP(dynamics_model, device_ids=[local_rank])
-
-    # FSQ for converting tokenizer latents to target indices (no trainable params)
-    fsq = FSQ(latent_dim=tokenizer_latent_dim, num_bins=tokenizer_num_bins).to(device)
 
     # Separate params: no weight decay on biases and norm weights
     decay_params = []
@@ -246,31 +260,18 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
         if ddp:
             sampler.set_epoch(epoch)
 
-        for batch_idx, videos in enumerate(dataloader):
+        for batch_idx, (latents, a_shifted, targets) in enumerate(dataloader):
             batch_start_time = time.time()
-            B = videos.shape[0]
-            videos = videos.to(device)  # (B, T, C, H, W)
-
-            with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=use_amp):
-                # Step A: get latents from frozen tokenizer
-                latents = video_tokenizer.encoder(videos)  # (B, T, N, latent_dim)
-
-                # Step B: get action tokens from frozen LAM
-                _, actions = lam(videos)  # (B, T-1, latent_dim_actions)
-
-                # Step C: prepare dynamics inputs — shift actions right by 1
-                null_action = torch.zeros(B, 1, lam_latent_dim_actions, device=device)
-                a_shifted = torch.cat([null_action, actions], dim=1)  # (B, T, latent_dim_actions)
-
-                targets = fsq.latent_to_index(latents)  # (B, T, N)
+            B = latents.shape[0]
+            latents = latents.to(device)       # (B, T, N, latent_dim)
+            a_shifted = a_shifted.to(device)   # (B, T, latent_dim_actions)
+            targets = targets.to(device)       # (B, T, N)
 
             lengths = torch.full((B,), T, dtype=torch.long, device=device)
 
-            # Step D: dynamics forward + loss
             with torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=use_amp):
                 _, dynamics_loss = dynamics_model(latents, a_shifted, lengths, targets=targets, training=True)
 
-            # Step E: backward
             dynamics_optimizer.zero_grad()
             dynamics_loss.backward()
             torch.nn.utils.clip_grad_norm_(dynamics_model.parameters(), max_norm=1.0)
