@@ -1,6 +1,6 @@
 {
-    "batch_size": 64,
-    "learning_rate": 4.24e-4,
+    "batch_size": 32,
+    "learning_rate": 3e-4,
     "sequence_length": 16,
     "img_size": [64, 64],
     "patch_size": 4,
