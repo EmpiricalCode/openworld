@@ -10,7 +10,7 @@ import os
 import h5py
 import json
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.model.video_tokenizer import VideoTokenizer
 from core.model.latent_action_model import LatentActionModel
