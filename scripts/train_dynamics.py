@@ -159,6 +159,7 @@ def train(resume=None, h5_path=None, num_epochs=10, volume_name=None):
         dynamics_model.train()
 
         total_dynamics_loss = 0
+        window_batch_time = 0
 
         if ddp:
             sampler.set_epoch(epoch)
@@ -183,10 +184,13 @@ def train(resume=None, h5_path=None, num_epochs=10, volume_name=None):
 
             batch_time = time.time() - batch_start_time
             total_dynamics_loss += dynamics_loss.item()
+            window_batch_time += batch_time
 
-            if is_main:
-                print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx}/{len(dataloader)}], "
-                      f"Dynamics Loss: {dynamics_loss.item():.6f}, Time: {batch_time:.3f}s")
+            if is_main and (batch_idx + 1) % 100 == 0:
+                avg_batch_time = window_batch_time / 100
+                print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx+1}/{len(dataloader)}], "
+                      f"Dynamics Loss: {dynamics_loss.item():.6f}, Avg Time: {avg_batch_time:.3f}s/batch")
+                window_batch_time = 0
 
         avg_dynamics_loss = total_dynamics_loss / len(dataloader)
 
