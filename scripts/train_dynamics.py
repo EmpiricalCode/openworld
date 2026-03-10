@@ -1,10 +1,8 @@
 import torch
-import torch.nn.functional as F
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import h5py
-import numpy as np
 import sys
 import os
 import time
@@ -14,81 +12,20 @@ import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.model.video_tokenizer import VideoTokenizer
-from core.model.latent_action_model import LatentActionModel
 from core.model.dynamics_model import DynamicsModel
-from core.model.components.quantization import FSQ
 
 
-class VizdoomDataset(Dataset):
-    def __init__(self, h5_path, sequence_length=16, video_tokenizer=None, lam=None, fsq=None,
-                 lam_latent_dim_actions=None, device=None):
-        """
-        Dataset that precomputes tokenizer latents, LAM actions, and FSQ targets
-        for every valid sliding window at init time.
-        """
-        self.sequence_length = sequence_length
-
-        print(f"Loading dataset from {h5_path}...")
+class PrecomputedDataset(Dataset):
+    def __init__(self, h5_path):
+        """Load precomputed latents and actions from h5 file."""
+        print(f"Loading precomputed dataset from {h5_path}...")
         with h5py.File(h5_path, 'r') as f:
-            frames = f['frames'][:]
-            dones = f['dones'][:]
-
-        total_frames = frames.shape[0]
-
-        episode_ends = np.where(dones)[0]
-        episode_starts = np.concatenate([[0], episode_ends[:-1] + 1]) if len(episode_ends) > 0 else [0]
-        episode_ends = np.concatenate([episode_ends, [total_frames - 1]])
-
-        valid_indices = []
-        for start, end in zip(episode_starts, episode_ends):
-            episode_length = end - start + 1
-            if episode_length >= sequence_length:
-                for i in range(start, end - sequence_length + 2):
-                    valid_indices.append(i)
-
-        num_sequences = len(valid_indices)
-        print(f"Dataset loaded: {total_frames} total frames, {num_sequences} valid sequences")
-
-        # Precompute all latents, actions, targets in batches (GPU can't fit all at once)
-        print(f"Precomputing latents...")
-        batch_size = 32
-        num_patches = (video_tokenizer.encoder.patch_embedding.num_patches)
-        latent_dim = fsq.latent_dim
-
-        self.all_latents = torch.zeros(num_sequences, sequence_length, num_patches, latent_dim)
-        self.all_actions = torch.zeros(num_sequences, sequence_length, lam_latent_dim_actions)
-        self.all_targets = torch.zeros(num_sequences, sequence_length, num_patches, dtype=torch.long)
-
-        use_amp = device.type == 'cuda'
-        with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=use_amp):
-            for i in range(0, num_sequences, batch_size):
-                batch_end = min(i + batch_size, num_sequences)
-                batch_indices = valid_indices[i:batch_end]
-                B = len(batch_indices)
-
-                batch_frames = np.stack([
-                    frames[idx:idx + sequence_length] for idx in batch_indices
-                ])
-                batch_frames = batch_frames.astype(np.float32) / 255.0
-                videos = torch.from_numpy(batch_frames).permute(0, 1, 4, 2, 3).to(device)
-
-                latents = video_tokenizer.encoder(videos)
-                targets = fsq.latent_to_index(latents)
-                _, actions = lam(videos)
-                null_action = torch.zeros(B, 1, lam_latent_dim_actions, device=device)
-                a_shifted = torch.cat([null_action, actions], dim=1)
-
-                self.all_latents[i:batch_end] = latents.float().cpu()
-                self.all_actions[i:batch_end] = a_shifted.float().cpu()
-                self.all_targets[i:batch_end] = targets.cpu()
-
-                if (i // batch_size) % 50 == 0:
-                    print(f"  {batch_end}/{num_sequences}")
+            self.all_latents = torch.from_numpy(f['latents'][:])
+            self.all_actions = torch.from_numpy(f['actions'][:])
+            self.all_targets = torch.from_numpy(f['targets'][:])
 
         total_mb = (self.all_latents.nbytes + self.all_actions.nbytes + self.all_targets.nbytes) / (1024**2)
-        print(f"Precomputation complete. Memory: {total_mb:.1f} MB")
-        print()
+        print(f"Loaded {len(self)} sequences ({total_mb:.1f} MB)")
 
     def __len__(self):
         return self.all_latents.shape[0]
@@ -97,7 +34,7 @@ class VizdoomDataset(Dataset):
         return self.all_latents[idx], self.all_actions[idx], self.all_targets[idx]
 
 
-def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5', tokenizer_ckpt=None, lam_ckpt=None, num_epochs=10, volume_name=None):
+def train(resume=None, h5_path=None, num_epochs=10, volume_name=None):
    
     if volume_name:
         vol = modal.Volume.from_name(volume_name, create_if_missing=True)
@@ -113,10 +50,8 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
     img_size = tuple(cfg['img_size'])
     patch_size = cfg['patch_size']
     in_channels = cfg['in_channels']
-    tokenizer_embed_dim = cfg['tokenizer_embed_dim']
     tokenizer_latent_dim = cfg['tokenizer_latent_dim']
     tokenizer_num_bins = cfg['tokenizer_num_bins']
-    lam_embed_dim = cfg['lam_embed_dim']
     lam_latent_dim_actions = cfg['lam_latent_dim_actions']
     dynamics_embed_dim = cfg['dynamics_embed_dim']
     dynamics_num_blocks = cfg['num_blocks']
@@ -140,39 +75,7 @@ def train(resume=None, h5_path='data/vizdoom_healthgathering/vizdoom_healthgathe
     num_patches_x = img_size[1] // patch_size
     num_patches_y = img_size[0] // patch_size
 
-    # Load frozen tokenizer + LAM for precomputation, then free them
-    video_tokenizer = VideoTokenizer(
-        img_size=img_size, patch_size=patch_size, in_channels=in_channels,
-        num_frames=sequence_length, embed_dim=tokenizer_embed_dim, latent_dim=tokenizer_latent_dim
-    ).to(device)
-    checkpoint = torch.load(tokenizer_ckpt, map_location=device)
-    video_tokenizer.load_state_dict(checkpoint['model_state_dict'])
-    for p in video_tokenizer.parameters():
-        p.requires_grad = False
-    video_tokenizer.eval()
-
-    lam = LatentActionModel(
-        img_size=img_size, patch_size=8, in_channels=in_channels,
-        num_frames=sequence_length, embed_dim=lam_embed_dim, latent_dim=tokenizer_latent_dim,
-        latent_dim_actions=lam_latent_dim_actions, num_bins=tokenizer_num_bins
-    ).to(device)
-    checkpoint = torch.load(lam_ckpt, map_location=device)
-    lam.load_state_dict(checkpoint['model_state_dict'])
-    for p in lam.parameters():
-        p.requires_grad = False
-    lam.eval()
-
-    fsq = FSQ(latent_dim=tokenizer_latent_dim, num_bins=tokenizer_num_bins).to(device)
-
-    dataset = VizdoomDataset(
-        h5_path=h5_path, sequence_length=sequence_length,
-        video_tokenizer=video_tokenizer, lam=lam, fsq=fsq,
-        lam_latent_dim_actions=lam_latent_dim_actions, device=device
-    )
-
-    # Free tokenizer/LAM from GPU — no longer needed
-    del video_tokenizer, lam, fsq, checkpoint
-    torch.cuda.empty_cache()
+    dataset = PrecomputedDataset(h5_path)
 
     sampler = DistributedSampler(dataset) if ddp else None
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, num_workers=0)
@@ -313,12 +216,10 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
-    parser.add_argument('--data', type=str, default='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5')
-    parser.add_argument('--tokenizer', type=str, required=True, help='Path to video tokenizer checkpoint')
-    parser.add_argument('--lam', type=str, required=True, help='Path to LAM checkpoint')
+    parser.add_argument('--data', type=str, required=True, help='Path to precomputed latents h5 file')
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--volume', type=str, default=None, help='Modal volume name to upload checkpoints to')
     args = parser.parse_args()
-    train(resume=args.resume, h5_path=args.data, tokenizer_ckpt=args.tokenizer, lam_ckpt=args.lam, num_epochs=args.epochs, volume_name=args.volume)
+    train(resume=args.resume, h5_path=args.data, num_epochs=args.epochs, volume_name=args.volume)
     if dist.is_initialized():
         dist.destroy_process_group()
