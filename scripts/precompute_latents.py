@@ -18,7 +18,7 @@ from core.model.components.quantization import FSQ
 
 
 def precompute(h5_path, tokenizer_ckpt, lam_ckpt, out_path):
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'core', 'config', 'dynamics.json')
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'core', 'config', 'dynamics.json')
     with open(config_path) as f:
         cfg = json.load(f)
 
