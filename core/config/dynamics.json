@@ -13,7 +13,7 @@
     "lam_embed_dim": 192,
     "lam_latent_dim_actions": 4,
 
-    "dynamics_embed_dim": 336,
+    "dynamics_embed_dim": 480,
     "num_blocks" : 8,
     "num_heads" : 8
 }
