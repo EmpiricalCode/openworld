@@ -10,6 +10,7 @@ import sys
 import os
 import h5py
 import cv2
+import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,7 +22,7 @@ from core.model.components.quantization import FSQ
 ACTION_NAMES = {0: '0', 1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6'}
 
 # Empirical mapping from game action index to LAM token index (Deathmatch)
-GAME_ACTION_TO_LAM_TOKEN = {0: 11, 1: 0, 2: 7, 3: 2, 4: 12, 5: 15, 6: 9}
+GAME_ACTION_TO_LAM_TOKEN = {0: 6, 1: 9, 2: 0, 3: 1, 4: 15, 5: 12, 6: 10}
 
 
 def action_index_to_latent(game_action, fsq, device):
@@ -117,17 +118,20 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
          h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
          num_steps=100, output_dir='outputs/inference', seed=42, volume_name=None):
 
-    # Config — must match training
-    sequence_length = 16
-    img_size = (64, 64)
-    patch_size = 4
-    in_channels = 3
-    tokenizer_embed_dim = 128
-    tokenizer_latent_dim = 5
-    tokenizer_num_bins = 4
-    lam_latent_dim_actions = 4
-    lam_latent_bins = 2
-    dynamics_embed_dim = 264
+    # Load config
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'core', 'config', 'dynamics.json')
+    with open(config_path) as f:
+        cfg = json.load(f)
+
+    sequence_length = cfg['sequence_length']
+    img_size = tuple(cfg['img_size'])
+    patch_size = cfg['patch_size']
+    in_channels = cfg['in_channels']
+    tokenizer_embed_dim = cfg['tokenizer_embed_dim']
+    tokenizer_latent_dim = cfg['tokenizer_latent_dim']
+    tokenizer_num_bins = cfg['tokenizer_num_bins']
+    lam_latent_dim_actions = cfg['lam_latent_dim_actions']
+    dynamics_embed_dim = cfg['dynamics_embed_dim']
 
     num_patches_x = img_size[1] // patch_size
     num_patches_y = img_size[0] // patch_size
@@ -151,7 +155,8 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     print(f"Loaded VideoTokenizer from {tokenizer_checkpoint}")
 
     # Standalone FSQ for action tokens (no learned params, just needs matching config)
-    action_fsq = FSQ(latent_dim=lam_latent_dim_actions, num_bins=lam_latent_bins).to(device)
+    # LAM hardcodes num_bins=2 for action FSQ
+    action_fsq = FSQ(latent_dim=lam_latent_dim_actions, num_bins=2).to(device)
 
     # Load DynamicsModel
     dynamics_model = DynamicsModel(
@@ -162,7 +167,9 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
         embed_dim=dynamics_embed_dim,
         latent_dim=tokenizer_latent_dim,
         latent_dim_actions=lam_latent_dim_actions,
-        num_bins=tokenizer_num_bins
+        num_bins=tokenizer_num_bins,
+        num_blocks=cfg['num_blocks'],
+        num_heads=cfg['num_heads']
     ).to(device)
     ckpt = torch.load(dynamics_checkpoint, map_location=device)
     dynamics_model.load_state_dict(ckpt['model_state_dict'])
