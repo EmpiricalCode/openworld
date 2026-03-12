@@ -8,6 +8,7 @@ import sys
 import os
 import h5py
 import cv2
+import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,15 +17,15 @@ from core.model.dynamics_model import DynamicsModel
 from core.model.components.quantization import FSQ
 
 
-ACTION_NAMES = {0: 'noop', 1: 'left', 2: 'right'}
-GAME_ACTION_TO_LAM_TOKEN = {0: 3, 1: 1, 2: 2}
+ACTION_NAMES = {0: 'attack', 1: 'move_forward', 2: 'move_left', 3: 'move_right', 4: 'turn_right', 5: 'turn_left', 6: 'noop'}
+GAME_ACTION_TO_LAM_TOKEN = {0: 6, 1: 9, 2: 0, 3: 1, 4: 15, 5: 12, 6: 10}
 
 # Action schedule: (action_id, num_frames)
 ACTION_SCHEDULE = [
-    (1, 10),   # left
-    (0, 30),   # noop
-    (2, 30),   # right
-    (0, 30),   # noop
+    (1, 25),   # move_forward
+    (5, 25),   # turn_left
+    (1, 25),   # move_forward
+    (3, 20),   # move_right
 ]
 
 
@@ -145,16 +146,20 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
          h5_path='data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5',
          output_dir='outputs/inference', seed=42, volume_name=None):
 
-    sequence_length = 16
-    img_size = (64, 64)
-    patch_size = 4
-    in_channels = 3
-    tokenizer_embed_dim = 128
-    tokenizer_latent_dim = 5
-    tokenizer_num_bins = 4
-    lam_latent_dim_actions = 3
-    lam_latent_bins = 2
-    dynamics_embed_dim = 216
+    # Load config
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'core', 'config', 'dynamics.json')
+    with open(config_path) as f:
+        cfg = json.load(f)
+
+    sequence_length = cfg['sequence_length']
+    img_size = tuple(cfg['img_size'])
+    patch_size = cfg['patch_size']
+    in_channels = cfg['in_channels']
+    tokenizer_embed_dim = cfg['tokenizer_embed_dim']
+    tokenizer_latent_dim = cfg['tokenizer_latent_dim']
+    tokenizer_num_bins = cfg['tokenizer_num_bins']
+    lam_latent_dim_actions = cfg['lam_latent_dim_actions']
+    dynamics_embed_dim = cfg['dynamics_embed_dim']
 
     num_patches_x = img_size[1] // patch_size
     num_patches_y = img_size[0] // patch_size
@@ -174,14 +179,16 @@ def main(dynamics_checkpoint, tokenizer_checkpoint,
     video_tokenizer.eval()
     print(f"Loaded VideoTokenizer from {tokenizer_checkpoint}")
 
-    action_fsq = FSQ(latent_dim=lam_latent_dim_actions, num_bins=lam_latent_bins).to(device)
+    # LAM hardcodes num_bins=2 for action FSQ
+    action_fsq = FSQ(latent_dim=lam_latent_dim_actions, num_bins=2).to(device)
 
     # Load DynamicsModel
     dynamics_model = DynamicsModel(
         num_patches_x=num_patches_x, num_patches_y=num_patches_y,
         in_channels=in_channels, num_frames=sequence_length,
         embed_dim=dynamics_embed_dim, latent_dim=tokenizer_latent_dim,
-        latent_dim_actions=lam_latent_dim_actions, num_bins=tokenizer_num_bins
+        latent_dim_actions=lam_latent_dim_actions, num_bins=tokenizer_num_bins,
+        num_blocks=cfg['num_blocks'], num_heads=cfg['num_heads']
     ).to(device)
     ckpt = torch.load(dynamics_checkpoint, map_location=device)
     dynamics_model.load_state_dict(ckpt['model_state_dict'])
