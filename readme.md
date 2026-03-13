@@ -18,7 +18,7 @@
 
 # 💡 About
 
-Openworld is an open-source world model based heavily on Google's original [Genie paper](https://arxiv.org/abs/2402.15391). It was trained on data gathered from the VizDoom library, and can run action-conditioned gameplay inference on a single high-end GPU. 
+Openworld is an open-source transformer-based world model based heavily on Google's original [Genie paper](https://arxiv.org/abs/2402.15391). It was trained on data gathered from the VizDoom library, and can run action-conditioned gameplay inference on a single high-end GPU. 
 
 There are two versions of the model within this repository; Openworld-10M and Openworld-28M. the 10 million parameter model was trained on the vizdoom-takecover environment with only 3 actions, and the 28 million parameter model was trained on vizdoom-deathmatch, a much more complex environment with 7 actions.
 
@@ -40,32 +40,40 @@ Genie (and thereby Openworld) is broken into 3 seperate models; the video tokeni
 
 The Video Tokenizer is responsible for converting raw video into what are called latent tokens; compressed, low-dimensional representations of data. The Dynamics Model takes these latent tokens, alongside action tokens, and generates a set of latent tokens representing the next frame. 
 
-How does it get these action tokens? In training, the Latent Action Model takes raw video and learns to generate action tokens, representing some meaningful change between previous latents and the next latents. The Dynamics Model then conditions its generation on these tokens, teaching the model what kinds of actions lead to what kinds of outcomes. Before we dive into the architecture of these models, there are some concepts I'd like to introduce first:
+How does it get these action tokens? In training, the Latent Action Model takes raw video and learns to generate action tokens, representing some meaningful change between previous latents and the next latents. The Dynamics Model then conditions its generation on these tokens, teaching the model what kinds of actions with what kinds of previous latents lead to what kinds of future latents. Before we dive into the architecture of these models, there are some concepts I'd like to introduce first:
 
 ### Finite Scalar Quantization
 
 Finite Scalar Quantization (FSQ) is a technique for quantizing vectors. I'd like to thank [Anand Majmudar](https://x.com/Almondgodd/status/1971314294517350533) and his very cool and similar project for introducing me to this concept. This is such a cool and simple algorithm which made my life a lot easier.
 
-Essentially, Genie works with quantized tokens/vectors. They utilized an algorithm called the Vector-Quantized Variational Auto-Encoder. This approach maintains a codebook of vectors. To quantize a given input vector, we simply return the closest codebook vector. These codebook vectors are also learned; they are updated via some algorithm (gradient descent, exponential moving average). 
-
-The problem with this algorithm is that it suffers from something called [codebook collapse](https://machinelearning.wtf/terms/codebook-collapse/), where only a small fraction of codebook vectors are actually utilized (due to the nature of pushing vectors around during training). FSQ solves that by re-thinking the entire quantization space. Instead of learned vectors, FSQ codebook vectors are essentially evenly-spaced points along the edges of a hypercube. We quantize in a similar fashion; essentially normalizing and snapping an input vector to one of these points. With a latent vector dimension of 3, this quantization space resembles a cube:
-
 <p align="center"><img src="assets/fsq.png" width="300"></p>
 
-<a id="training"></a>
+Essentially, Genie works with quantized latents (vectors). They utilized an algorithm called the Vector-Quantized Variational Auto-Encoder (VQ-VAE). This approach maintains a codebook of vectors. To quantize a given input vector, we simply return the closest codebook vector. These codebook vectors are also learned; they are updated via some algorithm (gradient descent, exponential moving average). 
 
-# 🏋️ Training
+The problem with this algorithm is that it suffers from something called [codebook collapse](https://machinelearning.wtf/terms/codebook-collapse/), where only a small fraction of codebook vectors are actually utilized (due to the nature of pushing vectors around during training). For example, some vectors may be pushed into regions that the inputs do not visit.
 
-TBD
+FSQ solves that by re-thinking the entire quantization space. Instead of learned vectors, FSQ codebook vectors are essentially evenly-spaced points along the edges of a hypercube. We quantize in a similar fashion; essentially snapping an input vector to one of these points (scaled within -1 to 1). The reason this works is that, since the vectors are evenly spaced and don't move around, they all have an equal chance of being utilized. With a latent vector dimension of 3 and 2 bins, this quantization space resembles a cube, as shown above.
 
-<a id="inference"></a>
+Check out the FSQ paper [here](https://arxiv.org/abs/2309.15505).
 
-# 🎮 Inference
+### Embedding
 
-TBD
+How do we actually feed our images into the tokenizer and action model? We need some way of embedding images into sequences of tokens that our transformers can actually work with. The answer is patch embeddings. We split a video into a sequence of individual frames. For each frame, we divide it into patches. For each patch, we flatten all the R, G, and B values into a single vector (each patch goes from shape (P, P, 3) into (P * P * 3)). 
 
-<a id="experimentation"></a>
+<p align="center"><img src="assets/embedding.png" width="800"></p>
 
-# 🧪 Experimentation
+Next, we project all of these patch vectors into the embedding space (the dimensionality of the actual embedding tokens our transformer will work with). This is done through a single linear layer, which is effectively a matrix multiplication across all patch vectors in order to convert them into tokens (dimensionality P * P * 3 -> embed_dim).
 
-TBD
+Finally, we need some way to encode *position* into each token. Just like in a sentence, a token in one position has a different contextual meaning than if it were somewhere else. To achieve this, we add 3 positional encoding vectors onto each patch token that encodes where that patch is in terms of time, X, and Y position. I won't go too into detail for positional encoding, since there is a great resource I found [here](https://huggingface.co/blog/designing-positional-encoding).
+
+## Video Tokenizer
+
+WIP Section
+
+## Latent Action Model
+
+WIP Section
+
+## Dynamics Model
+
+WIP Section
