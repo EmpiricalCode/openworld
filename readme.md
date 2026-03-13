@@ -24,9 +24,7 @@ There are two versions of the model within this repository; Openworld-10M and Op
 
 ## Motivations
 
-When I first came across the demo for [Genie 3](https://deepmind.google/models/genie/), I was immediately awestruck. This was the first time I truly realized that generative AI had the potential to accurately model the dynamics of the real world, rather than being just a tool for making funny Will Smith videos. 
-
-My goal with this project was, first of all, to learn as much as I could about a new frontier of AI - world models. On top of that, I also wanted to share my learnings  with other people interested in the same things, so I've created a write-up on the architecture and techniques I used.
+When I first came across the demo for [Genie 3](https://deepmind.google/models/genie/), that was when I truly realized that generative AI had the potential to accurately model the dynamics of the real world, rather than being just a tool for making funny Will Smith videos. My goal with this project was, first of all, to learn as much as I could about a new frontier of AI - world models. On top of that, I also wanted to share my learnings  with other people interested in the same things, so I've created a write-up on the architecture and techniques I used.
 
 <a id="architecture"></a>
 
