@@ -40,6 +40,16 @@ The Video Tokenizer is responsible for converting raw video into what are called
 
 How does it get these action tokens? In training, the Latent Action Model takes raw video and learns to generate action tokens, representing some meaningful change between previous latents and the next latents. The Dynamics Model then conditions its generation on these tokens, teaching the model what kinds of actions with what kinds of previous latents lead to what kinds of future latents. Before we dive into the architecture of these models, there are some concepts I'd like to introduce first:
 
+### Spatio-Temporal Transformer
+
+This transformer architecture is the bread and butter of this world model (note that for this section, a basic understanding of transformers is a pre-requisite). It consists of a chain of spatio-temporal transformer blocks. Each block contains a spatial attention block, a temporal attention block, and then a feed-forward layer. As described in the Genie paper, the spatial attention block attends over all patch tokens within a frame. The temporal attention block then attends over all patch tokens in "tubelets" through time (IE, tokens within the same spatial location, through all frames in time).
+
+<p align="center"><img src="assets/spatio-temporal-transformer.png" width="600"></p>
+
+A lot of the finer details are ommitted from this diagram that I will briefly go over. The FFN layer uses a SwiGLU activation. At first I tried GeLU, and later switched to SwiGLU since it seems to perform better in LLMs. First, note that each attention block implements standard Multi-Headed Attention (MHA). We also employ residual connections on the attention blocks and the FFN block, which is SoTA for transformers. For layer norm, we have two options. For usecases which don't require conditioning, we use RMSNorm. For the latent action model and the dynamics model, which need to condition generation on action tokens, we use AdaLN.
+
+I recommend checking out [this](https://arxiv.org/abs/2102.05095) paper, which describes that divided self attention performs better in video classification tasks. This was likely the basis for the spatio-temporal transformer.
+
 ### Finite Scalar Quantization
 
 Finite Scalar Quantization (FSQ) is a technique for quantizing vectors. I'd like to thank [Anand Majmudar](https://x.com/Almondgodd/status/1971314294517350533) and his very cool and similar project for introducing me to this concept. This is such a cool and simple algorithm which made my life a lot easier.
