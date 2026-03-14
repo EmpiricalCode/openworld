@@ -18,7 +18,7 @@
 
 # 💡 About
 
-Openworld is an open-source transformer-based world model based heavily on Google's original [Genie paper](https://arxiv.org/abs/2402.15391). It was trained on data gathered from the VizDoom library, and can run action-conditioned gameplay inference on a single high-end GPU. 
+Openworld is an open-source transformer world model based heavily on Google's original [Genie paper](https://arxiv.org/abs/2402.15391). It was trained on data gathered from the VizDoom library, and can run action-conditioned gameplay inference on a single high-end GPU. 
 
 There are two versions of the model within this repository; Openworld-10M and Openworld-28M. the 10 million parameter model was trained on the vizdoom-takecover environment with only 3 actions, and the 28 million parameter model was trained on vizdoom-deathmatch, a much more complex environment with 7 actions.
 
@@ -44,13 +44,13 @@ How does it get these action tokens? In training, the Latent Action Model takes 
 
 Finite Scalar Quantization (FSQ) is a technique for quantizing vectors. I'd like to thank [Anand Majmudar](https://x.com/Almondgodd/status/1971314294517350533) and his very cool and similar project for introducing me to this concept. This is such a cool and simple algorithm which made my life a lot easier.
 
-<p align="center"><img src="assets/fsq.png" width="300"></p>
-
 Essentially, Genie works with quantized latents (vectors). They utilized an algorithm called the Vector-Quantized Variational Auto-Encoder (VQ-VAE). This approach maintains a codebook of vectors. To quantize a given input vector, we simply return the closest codebook vector. These codebook vectors are also learned; they are updated via some algorithm (gradient descent, exponential moving average). 
 
 The problem with this algorithm is that it suffers from something called [codebook collapse](https://machinelearning.wtf/terms/codebook-collapse/), where only a small fraction of codebook vectors are actually utilized (due to the nature of pushing vectors around during training). For example, some vectors may be pushed into regions that the inputs do not visit.
 
-FSQ solves that by re-thinking the entire quantization space. Instead of learned vectors, FSQ codebook vectors are essentially evenly-spaced points along the edges of a hypercube. We quantize in a similar fashion; essentially snapping an input vector to one of these points (scaled within -1 to 1). The reason this works is that, since the vectors are evenly spaced and don't move around, they all have an equal chance of being utilized. With a latent vector dimension of 3 and 2 bins, this quantization space resembles a cube, as shown above.
+<p align="center"><img src="assets/fsq.png" width="300"></p>
+
+FSQ solves that by re-thinking the entire quantization space. Instead of learned vectors, FSQ codebook vectors are essentially evenly-spaced points along the edges of a hypercube. We quantize in a similar fashion; essentially snapping an input vector to one of these points (scaled within -1 to 1). The reason this works is that, since the vectors are evenly spaced and don't move around, they all have an equal chance of being utilized. With a latent vector dimension of 3 and 2 bins, this quantization space resembles the corners of a cube, as shown above.
 
 Check out the FSQ paper [here](https://arxiv.org/abs/2309.15505).
 
@@ -66,7 +66,20 @@ Finally, we need some way to encode *position* into each token. Just like in a s
 
 ## Video Tokenizer
 
-WIP Section
+The video tokenizer is fundamentally an auto-encoder which includes an FSQ step in between the encoder and decoder. It works by compressing (encoding) video into a latent representation, then trying to decode that into the same video again, learning to preserve the most useful information within its latent.
+
+<p align="center"><img src="assets/tokenizer-encoder.png" width="800"></p>
+
+The encoder takes raw video, runs it through patch embedding and positional encoding blocks, and a spatio-temporal transformer. Finally, the tokens are projected down into the latent dimension, from the embedding dimension. This is where the data compression occurs.
+
+<p align="center"><img src="assets/tokenizer-quantization.png" width="300"></p>
+
+Next, we pass the pre-quantized latent through FSQ. Note that the resulting quantized latent is the video tokenizer's output, which is used by the dynamics model.
+
+<p align="center"><img src="assets/tokenizer-decoder.png" width="800"></p>
+
+Finally, our decoder takes the quantized latents, passes it through the spatio-temporal transformer again, and then unembeds each patch back into pixel formats. In hindsight, I also could have added a positional encoding block before we pass the tokens into the spatio-temporal transformer within the decoder, but in practice the video tokenizer never struggled with its objective.
+
 
 ## Latent Action Model
 
