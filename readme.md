@@ -30,6 +30,11 @@ When I first came across the demo for [Genie 3](https://deepmind.google/models/g
 
 # 🏛️ Architecture
 
+- [Introduction](#introduction)
+- [Video Tokenizer](#video-tokenizer)
+- [Latent Action Model](#latent-action-model)
+- [Dynamics Model](#dynamics-model)
+
 ## Introduction
 
 Genie (and thereby Openworld) is broken into 3 seperate models; the video tokenizer, the latent action model, and the dynamics model. 
@@ -93,7 +98,29 @@ Finally, our decoder takes the quantized latents, passes it through the spatio-t
 
 ## Latent Action Model
 
-WIP Section
+Previously, world models that could generate action-conditioned video needed labelled/supervised data in order to train. Genie introduced the concept of using a Latent Action Model (LAM) in order to infer actions from video, allowing Genie to train on unlabelled data and massively expand its training set. This was likely instrumental in allowing Genie to be the first ever foundational world model (a model that can be generalized across diverse environments).
+
+The LAM is broken into two models, the encoder and decoder. It is structured similarly to an auto-encoder. The encoder is responsible for taking raw video, and producing action tokens. Each action token is some representation of the change between the previous frames and next frames. The decoder takes these actions, and alongside the previous frames, tries to reconstruct the next frame. By employing a reconstruction loss, the idea is that the LAM should encode a meaningful representation of change into each action token such that it can be used to predict the next scene.
+
+<p align="center"><img src="assets/latent-action-encoder.png" width="800"></p>
+
+The latent action encoder is essentially the same as the encoder in our Video Tokenizer.
+
+<p align="center"><img src="assets/fsq-lam.png" width="300"></p>
+
+The key difference is after the quantization step. We pass the tokens through FSQ like normal, but we remove the first token, since its context comprises solely of the first token. We want token N to represent some change between frames 1 -> N-1 and frame N, so token 1 is useless to us. If there are T frames, we produce T-1 action tokens.
+
+<p align="center"><img src="assets/latent-action-decoder.png" width="1000"></p>
+
+The decoder is itself very similar to an auto-encoder. The decoder first discards the last frame, and re-encodes the input using a masked version of the Video Tokenizer's encoder. The masked encoder randomly masks patch tokens in order to reduce the history signal and to try to get the decoder to pay more attention to the action tokens. After encoding the video, the latents are passed through a spatio-temporal transformer conditioned on the action tokens from the encoder. The transformer's output is then put through an unembedding process to try to reconstruct all next frames.
+
+The decoder is given frames 1 to T-1. It also recieves T-1 actions, representing some change between frames 1 and 2, frames 2 and 3, etc. We use these to try to reconstruct frames 2 to T. The key realization here is that the spatio-temporal transformer is causal in nature; the tokens corresponding to frame t not only have access to action t for conditioning, but also *attend to all frame tokens before it*, giving it enough context to reconstruct frame t+1.
+
+### The Problem
+
+At first, it was very difficult to have this model produce meaningful actions at this scale (~5.5M parameters). It suffered from action collapse, meaning that it would map multiple sequences of frames to the same tokens when, in ground-truth, they were distinct actions. The issue was most likely that the historical frames were enough signal for the decoder to predict a reasonable next frame, and so it fell into a local minima and ignored signal from its own action tokens.
+
+In order to mitigate this problem, I added a tiny classifier head which takes the action tokens, and tries to predict which action this token corresponds to. I then labelled a small portion of the data and introduced a semi-supervised cross-entropy auxillary loss on this classifier. Since the classifier is a single linear layer with essentially zero expressive power, the brunt of the work is left to the encoder in order to separate actions into distinct tokens. In practice, I achieved 90%+ action separation with as little as 10% of the data labelled. This method massively enhanced the usefulness of my LAM, while also preserving its original goal, which was to allow the model to train on vast amounts of unlabelled data. A deeper analysis of this method is detailed in the training section.
 
 ## Dynamics Model
 
