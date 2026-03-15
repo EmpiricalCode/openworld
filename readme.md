@@ -37,7 +37,7 @@ When I first came across the demo for [Genie 3](https://deepmind.google/models/g
 
 ## Introduction
 
-Genie (and thereby Openworld) is broken into 3 seperate models; the video tokenizer, the latent action model, and the dynamics model. 
+I would like to preface this by saying, this writeup should be supplementary to the original papers; I would highly highly recommend understanding all the individual research first and fore-most. Genie (and thereby Openworld) is broken into 3 seperate models; the video tokenizer, the latent action model, and the dynamics model.
 
 <p align="center"><img src="assets/architecture-overview.png" width="600"></p>
 
@@ -124,4 +124,33 @@ In order to mitigate this problem, I added a tiny classifier head which takes th
 
 ## Dynamics Model
 
+The dynamics model is responsible for taking context frame latents and generating the next frame, conditioned on actions. However, this generation is quite different from how it's done in the LAM. The Dynamics Model uses a MaskGIT backbone. this architecture excels at a task called infilling, where it learns to generate image tokens based on the surrounding context. Given that it's a transformer, we can also insert AdaLN to condition generation. MaskGIT works by iteratively predicting all patch tokens at once, taking the most confident ones, inserting them into the input and unmasking, and repeating until all patch tokens are generated. Note that our MaskGIT architecture still employes a spatio-temporal transformer under the hood. I would highly recommend reading the [MaskGIT paper](https://arxiv.org/abs/2202.04200).
+
+<p align="center"><img src="assets/dynamics-model.png" width="800"></p>
+
+First, we take the latents provided by the Video Tokenizer. To generate the next frame, we append a completely masked frame at the end of our video. We then project our latents into the embedding dimension and pass them through the spatio-temporal transformer. The output tokens for the masked frame are then fed through a prediction head, which projects each token into a vector of dimension `size_codebook` and applies softmax. This gives each masked patch a probability distribution over all possible codebook entries.
+
+From here, iterative decoding begins. We select the predictions with the highest confidence (i.e., the highest softmax probability), unmask those patches by replacing them with the input latent, and re-run the transformer. Each iteration, the model has more context to work with, allowing it to make increasingly informed predictions for the remaining masked patches. This process repeats until all patches in the new frame are unmasked. 
+
+<p align="center"><img src="assets/maskgit-scheduler.webp" width="500"></p>
+
+According to the MaskGIT research, generation quality is heavily influenced by the mask scheduling function, or the function that determines how much of the previously masked tokens should be unmasked at every iteration. As per the paper, we employ a cosine schedule, which unmasks few tokens at once early on, and then later on, unmasks many at a time.
+
+<a id="training"></a>
+
+# 🏋️ Training
+
 WIP Section
+
+<a id="inference"></a>
+
+# 🎮 Inference
+
+WIP Section
+
+<a id="experimentation"></a>
+
+# 🔬 Experimentation
+
+WIP Section
+
