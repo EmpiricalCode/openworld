@@ -9,15 +9,23 @@ image = (
 )
 
 app = modal.App.lookup("my-sandbox", create_if_missing=True)
-vol = modal.Volume.from_name("dream-rl-outputs", create_if_missing=True)
+data_vol = modal.Volume.from_name("data-deathmatch-large", create_if_missing=True)
+tokenizer_vol = modal.Volume.from_name("tokenizer-checkpoint-deathmatch")
+lam_vol = modal.Volume.from_name("lam-deathmatch-large")
+dynamics_vol = modal.Volume.from_name("dynamics-deathmatch-large")
 
 sb = modal.Sandbox.create(
     image=image,
-    gpu="l40s:2",
+    gpu="a10",
     timeout=3600 * 24,
     app=app,
     secrets=[github_secret],
-    volumes={"/outputs": vol},
+    volumes={
+        "/data": data_vol,
+        "/tokenizer-ckpt": tokenizer_vol,
+        "/lam-ckpt": lam_vol,
+        "/dynamics-ckpt": dynamics_vol,
+    },
 )
 
 def run(cmd):
@@ -33,8 +41,7 @@ def run(cmd):
 run("git clone https://$GITHUB_TOKEN@github.com/EmpiricalCode/dream-rl.git /root/dream-rl")
 run("cd /root/dream-rl && python -m venv venv")
 run("cd /root/dream-rl && venv/bin/pip install -r requirements.txt")
-run("cd /root/dream-rl && venv/bin/pip install gdown")
-run("mkdir -p /root/dream-rl/data/vizdoom_healthgathering")
-run("cd /root/dream-rl && venv/bin/gdown 1NOvGmrsH10UysL-g1zYOktL-hYkRzMWS -O data/vizdoom_healthgathering/vizdoom_healthgathering_dqn.h5")
+run("mkdir -p /root/dream-rl/checkpoints && cp /tokenizer-ckpt/* /root/dream-rl/checkpoints/ && cp /lam-ckpt/* /root/dream-rl/checkpoints/ && cp /dynamics-ckpt/* /root/dream-rl/checkpoints/")
+run("ls -la /root/dream-rl/checkpoints/")
 
 print(f"Sandbox ID: {sb.object_id}")

@@ -126,7 +126,6 @@ def test_action_consistency(lam_checkpoint, h5_path='data/vizdoom_healthgatherin
 
     # Summary
     print(f"\nSummary:")
-    action_names = {0: 'noop', 1: 'move_forward', 2: 'turn_right', 3: 'turn_left'}
     dominant_map = {}
     for game_action in sorted(action_token_counts.keys()):
         token_dist = action_token_counts[game_action]
@@ -134,9 +133,8 @@ def test_action_consistency(lam_checkpoint, h5_path='data/vizdoom_healthgatherin
         counts = [token_dist.get(t, 0) for t in range(num_tokens)]
         dominant_token = int(np.argmax(counts))
         purity = counts[dominant_token] / total
-        name = action_names.get(game_action, str(game_action))
         dominant_map[game_action] = dominant_token
-        print(f"  Game action {game_action} ({name}) -> LAM token {dominant_token} ({purity*100:.1f}% of the time)")
+        print(f"  Game action {game_action} -> LAM token {dominant_token} ({purity*100:.1f}% of the time)")
 
     # Check for collisions (two game actions mapping to same token)
     tokens_used = list(dominant_map.values())

@@ -23,7 +23,7 @@ GAME_ACTION_TO_LAM_TOKEN = {0: 6, 1: 9, 2: 0, 3: 1, 4: 15, 5: 12, 6: 10}
 # Action schedule: (action_id, num_frames)
 ACTION_SCHEDULE = [
     (1, 25),   # move_forward
-    (5, 25),   # turn_left
+    (6, 25),   # turn_left
     (1, 25),   # move_forward
     (3, 20),   # move_right
 ]
