@@ -5,7 +5,6 @@
   <a href="#architecture">Architecture</a> &nbsp;&bull;&nbsp;
   <a href="#training">Training</a> &nbsp;&bull;&nbsp;
   <a href="#inference">Inference</a> &nbsp;&bull;&nbsp;
-  <a href="#experimentation">Experimentation</a>
 </p>
 
 <br>
@@ -47,11 +46,11 @@ How does it get these action tokens? In training, the Latent Action Model takes 
 
 ### Spatio-Temporal Transformer
 
-This transformer architecture is the bread and butter of this world model (note that for this section, a basic understanding of transformers is a pre-requisite). It consists of a chain of spatio-temporal transformer blocks. Each block contains a spatial attention block, a temporal attention block, and then a feed-forward layer. As described in the Genie paper, the spatial attention block attends over all patch tokens within a frame. The temporal attention block then attends over all patch tokens in "tubelets" through time (IE, tokens within the same spatial location, through all frames in time).
+This transformer architecture is the bread and butter of this world model (note that for this section, a basic understanding of transformers is a pre-requisite). It consists of a chain of spatio-temporal transformer blocks. Each block contains a spatial attention block, a temporal attention block, and then a feed-forward layer. As described in the Genie paper, the spatial attention block attends over all patch tokens within a frame. The temporal attention block then attends over all patch tokens in "tubelets" through time (IE, tokens within the same spatial location, through all frames in time). Note that temporal attention is masked, whereas spatial attention is not.
 
 <p align="center"><img src="assets/spatio-temporal-transformer.png" width="600"></p>
 
-A lot of the finer details are ommitted from this diagram that I will briefly go over. The FFN layer uses a SwiGLU activation. At first I tried GeLU, and later switched to SwiGLU since it seems to perform better in LLMs. First, note that each attention block implements standard Multi-Headed Attention (MHA). We also employ residual connections on the attention blocks and the FFN block, which is SoTA for transformers. For layer norm, we have two options. For usecases which don't require conditioning, we use RMSNorm. For the latent action model and the dynamics model, which need to condition generation on action tokens, we use AdaLN.
+A lot of the finer details are ommitted from this diagram that I will briefly go over. The FFN layer uses a SwiGLU activation. At first I tried GeLU, and later switched to SwiGLU since it seems to perform better in LLMs. Note that each attention block implements standard Multi-Headed Attention (MHA). We also employ residual connections on the attention blocks and the FFN block, which is SoTA for transformers. For layer norm, we have two options. For usecases which don't require conditioning, we use RMSNorm. For the latent action model and the dynamics model, which need to condition generation on action tokens, we use AdaLN.
 
 I recommend checking out [this](https://arxiv.org/abs/2102.05095) paper, which describes that divided self attention performs better in video classification tasks. This was likely the basis for the spatio-temporal transformer.
 
@@ -95,10 +94,9 @@ Next, we pass the pre-quantized latent through FSQ. Note that the resulting quan
 
 Finally, our decoder takes the quantized latents, passes it through the spatio-temporal transformer again, and then unembeds each patch back into pixel formats. In hindsight, I also could have added a positional encoding block before we pass the tokens into the spatio-temporal transformer within the decoder, but in practice the video tokenizer never struggled with its objective.
 
-
 ## Latent Action Model
 
-Previously, world models that could generate action-conditioned video needed labelled/supervised data in order to train. Genie introduced the concept of using a Latent Action Model (LAM) in order to infer actions from video, allowing Genie to train on unlabelled data and massively expand its training set. This was likely instrumental in allowing Genie to be the first ever foundational world model (a model that can be generalized across diverse environments).
+Previously, world models that could generate action-conditioned video needed labelled/supervised data in order to train. Genie introduced the concept of using a Latent Action Model (LAM) in order to infer actions from video, allowing Genie to train on unlabelled data and massively expand its training set. This was likely instrumental in allowing Genie to be the first ever foundational world model (a model that can be generalized across diverse environments). Note that the LAM only exists to provide training signal to the dynamics model; it is discarded during inference.
 
 The LAM is broken into two models, the encoder and decoder. It is structured similarly to an auto-encoder. The encoder is responsible for taking raw video, and producing action tokens. Each action token is some representation of the change between the previous frames and next frames. The decoder takes these actions, and alongside the previous frames, tries to reconstruct the next frame. By employing a reconstruction loss, the idea is that the LAM should encode a meaningful representation of change into each action token such that it can be used to predict the next scene.
 
@@ -140,17 +138,50 @@ According to the MaskGIT research, generation quality is heavily influenced by t
 
 # 🏋️ Training
 
-WIP Section
+- [Video Tokenizer](#video-tokenizer-1)
+- [Latent Action Model](#latent-action-model-1)
+- [Dynamics Model](#dynamics-model-1)
+
+## Data Gathering
+
+The vizdoom-takecover dataset had ~70k steps of gameplay, which was sampled by a random agent which would randomly have a bias to move left, right, or to not move at all in each episode. For the vizdoom-deathmatch environment, I sourced an rl implementation from this [repo](https://github.com/lkiel/rl-doom), trained the agent, and gathered about 300k rollout steps. Note that this is distinct from the deathmatch environment found [here](https://vizdoom.farama.org/environments/default/).
+
+## Video Tokenizer
+
+The Video Tokenizer was trained on 64x64 images with a patch size of 4, so 16 patches horizontally and vertically. We have a latent dimension of 5, with 4 bins, meaning there are 4^5 = 1024 possible codebook vectors. We employ a Mean Squared Error (MSE) loss to compare ground-truth and reconstructed frames, and a vanilla Adam optimizer. The tokenizer for both environments only needed about 1.7M parameters to achieve good convergence, corresponding to an embedding dimension of 128. I did not experiment to see if it could have been made smaller.
+
+## Latent Action Model
+
+The latent action model was trained on 64x64 images with a patch size of 8, so 8 patches horizontally and vertically. Given that the LAM is not used for reconstruction and only needs enough signal to distinguish actions, I hypothesized that we could increase patch size from 4 and reduce parameter count a little.
+
+Even with the semi-supervised auxillary loss discussed earlier, the LAM struggled to provide good action seperation, and good accuracy for each action. I discovered through a rough ablation study on the vizdoom-takecover environment that, as I increased the labelled percentage, the model began to converge faster and faster. With 100% labelled, the LAM converged in ~2-3 epochs. with 50% labelled, it took 4-5 epochs. With 10% labelled, it did not converge within 20 epochs. One would think this is simply a data problem, and that the model just needed more labelled examples. However, even with 10% labelled there would be ~2k labelled examples for each of the 3 actions. 
+
+I hypothesized that the problem lied in gradient noise, and not a lack of data. The LAM was originally trained with a batch size of 32 and predicted 15 actions per batch. In each training batch, each labelled sample gives us a single loss datapoint, and the overall supervised loss is the average of these datapoints. Let's define each individual supervised loss point as a random variable with mean $\mu$ and variance $\sigma^2$. The average loss per batch is then:
+
+$$\bar{L} = \frac{1}{n} \sum_{i=1}^{n} L_i, \quad E(\bar{L}) = \mu, \quad \text{Var}(\bar{L}) = \frac{\sigma^2}{n}$$
+
+With the dataset 100% labelled, we have $n = 32 \times 15 = 480$ labelled samples per batch:
+
+$$\text{Var}(\bar{L}_{100\%}) = \frac{\sigma^2}{480}$$
+
+With only 10% labelled, $n = 48$:
+
+$$\text{Var}(\bar{L}_{10\%}) = \frac{\sigma^2}{48}$$
+
+That's 10x the variance in our loss signal! A noisy loss leads to a noisy gradient, which tends to wander around more randomly and takes longer to converge. In order to combat this, I implemented DDP across 2 GPUs, which effectively doubles your batch size as each GPU gathers its own batch every training iteration, and averages gradients. I also doubled batch size from 32 to 64. These two improvements proved very effective and allowed the LAM to converge quickly with as little as 10% labelled samples.
+
+## Dynamics Model
+
+The Dynamics model was trained on 64x64 images with a patch size of 4. Since the Dynamics Model does not work with raw video, we precompute all the frame and action latents to try to save a bit of training time. In training, we do not perform iterative decoding. Rather, each sample is a collection of latents we pass to the Dynamics Model. We randomly mask the frame latents, and we task the Dynamics Model with predicting what codebook vectors should be in the masked spaces. Our loss is therefore a cross-entropy loss across all possible codebook vectors. 
+
+We employ a Warmup-Stable-Decay (WSD) learning rate scheduler, which essentially keeps learning rate at a high and constant value for the first portion of training, then decays learning rate over the rest of the epochs. I originally had a cosine-annealing scheduler, but switched to WSD because I couldn't tell if the model was plateauing or if the learning rate had just become too small. We employ bf16 (16 bit precision instead of 32) during the forward pass in order to save memory. We also DDP across multiple GPUs to save time.
+
+<p align="center"><img src="assets/dynamics-training-comparison.png" width="800"></p>
+
+We can observe the river-valley phenomenon with WSD, where loss drops sharper during the cooldown phase. During the stable phase, learning rate is high and the model oscillates across the "valley". During cooldown, the smaller learning rate allows it to settle. Similar to the Genie paper, I observed healthy loss reductions as I scaled the model. The current 28M model isn't large enough to persist enemies within the environment, but further scaling would no doubt improve performance. Note that the first two models (8m, 12m) were trained with 60 epochs on 100k steps of gameplay, and the third dynamics model (26m) was trained with 20 epochs on 300k steps of gameplay.
 
 <a id="inference"></a>
 
 # 🎮 Inference
 
 WIP Section
-
-<a id="experimentation"></a>
-
-# 🔬 Experimentation
-
-WIP Section
-
