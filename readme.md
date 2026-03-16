@@ -184,4 +184,6 @@ We can observe the river-valley phenomenon with WSD, where loss drops sharper du
 
 # 🎮 Inference
 
-WIP Section
+<p align="center"><img src="assets/inference.png" width="800"></p>
+
+For inference, we discard the latent action model, keeping only its codebook. We start with a single seed frame, encoded through the video tokenizer. Every step, we sample an action token from this codebook, corresponding to an action. We take this action token, alongside the context window (which is an array of previous frame latents) and generate the next latent through the dynamics model. We then decode that frame through the video tokenizer. By aggregating these output frames, we produce a video of the generated gameplay.
