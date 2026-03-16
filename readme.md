@@ -4,7 +4,7 @@
   <a href="#about">About</a> &nbsp;&bull;&nbsp;
   <a href="#architecture">Architecture</a> &nbsp;&bull;&nbsp;
   <a href="#training">Training</a> &nbsp;&bull;&nbsp;
-  <a href="#inference">Inference</a> &nbsp;&bull;&nbsp;
+  <a href="#inference">Inference</a>
 </p>
 
 <br>
