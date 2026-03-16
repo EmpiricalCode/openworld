@@ -162,11 +162,11 @@ $$\bar{L} = \frac{1}{n} \sum_{i=1}^{n} L_i, \quad E(\bar{L}) = \mu, \quad \text{
 
 With the dataset 100% labelled, we have $n = 32 \times 15 = 480$ labelled samples per batch:
 
-$$\text{Var}(\bar{L}_{100\%}) = \frac{\sigma^2}{480}$$
+$$\text{Var}(\bar{L}_{100\\%}) = \frac{\sigma^2}{480}$$
 
 With only 10% labelled, $n = 48$:
 
-$$\text{Var}(\bar{L}_{10\%}) = \frac{\sigma^2}{48}$$
+$$\text{Var}(\bar{L}_{10\\%}) = \frac{\sigma^2}{48}$$
 
 That's 10x the variance in our loss signal! A noisy loss leads to a noisy gradient, which tends to wander around more randomly and takes longer to converge. In order to combat this, I implemented DDP across 2 GPUs, which effectively doubles your batch size as each GPU gathers its own batch every training iteration, and averages gradients. I also doubled batch size from 32 to 64. These two improvements proved very effective and allowed the LAM to converge quickly with as little as 10% labelled samples.
 
